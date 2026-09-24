@@ -380,13 +380,18 @@ public class EchoCommandGameTests {
 				h.assertValueEqual(t.entityId(), e.getId(), "trail entity id");
 				h.assertTrue(t.points() >= 1 && t.points() <= EchoTrailPayload.MAX_POINTS, "points " + t.points());
 				h.assertTrue(matchesUpcoming(t, path, cursorAtFirst[0]), "trail points are the upcoming recorded positions; cursor "
-						+ cursorAtFirst[0] + ", first point " + t.xyz()[0] + "," + t.xyz()[1] + "," + t.xyz()[2]);
+						+ cursorAtFirst[0] + ", points " + java.util.Arrays.toString(t.xyz()) + ", path from cursor "
+						+ path.subList((int) cursorAtFirst[0], (int) Math.min(path.size(), cursorAtFirst[0] + 12)));
 				h.assertTrue(payloads(vanillaSeen, EchoTrailPayload.class).isEmpty(), "vanilla player got a trail payload");
 			} finally {
 				cleanup(h, u);
 				cleanup(h, vanilla.player());
 			}
 		}).thenSucceed();
+	}
+
+	private static boolean near(float got, double want) {
+		return Math.abs(got - (float) want) <= 2 * Math.ulp((float) want) + 0.05;
 	}
 
 	/** True when, for some cursor c near {@code cursor}, point i == recorded position at c + 5 * (i + 1). */
@@ -401,8 +406,8 @@ public class EchoCommandGameTests {
 				}
 				Vec3 p = path.get((int) tick);
 				float[] xyz = t.xyz();
-				double d = Math.abs(xyz[i * 3] - p.x) + Math.abs(xyz[i * 3 + 1] - p.y) + Math.abs(xyz[i * 3 + 2] - p.z);
-				if (d > 0.1) all = false;
+				// the payload carries floats: at gametest-grid coordinates (~1e7) a float step is up to 1 block
+				if (!near(xyz[i * 3], p.x) || !near(xyz[i * 3 + 1], p.y) || !near(xyz[i * 3 + 2], p.z)) all = false;
 			}
 			if (all) return true;
 		}

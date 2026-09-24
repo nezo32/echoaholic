@@ -325,51 +325,38 @@ public class EchoSoloGameTests {
 
 	// ---------------------------------------------------------------------------------------------- cheap mode
 
-	/** An echo more than cheapModeDistance from every player: cheap (silent, no held item) but still breaks blocks. */
-	@GameTest(environment = NS + "solo_cheap", maxTicks = 3000)
+	/**
+	 * An echo farther than cheapModeDistance from every player is cheap (silent, no held item) but still breaks blocks.
+	 * The distance is lowered to its minimum (16) and the owner parked 40 blocks up, instead of loading a far chunk.
+	 */
+	@GameTest(environment = NS + "solo_cheap", maxTicks = 400)
 	public void cheapModeFar(GameTestHelper h) {
-		TestSupport.echoWorld(h);
-		ServerLevel level = h.getLevel();
-		BlockPos mid = h.absolutePos(BlockPos.ZERO).offset(2000, 0, -2000);
-		int cx = mid.getX() >> 4, cz = mid.getZ() >> 4;
-		BlockPos base = new BlockPos((cx << 4) + 8, mid.getY(), (cz << 4) + 8);
-		level.setChunkForced(cx, cz, true);
-		Replay[] r = {null};
-		long[] tBreak2 = {-1};
-		BlockPos b1 = base.offset(2, 0, 0), b2 = base.offset(2, 1, 0);
+		EchoConfig before = withConfig(h, c -> c.withCheapModeDistance(EchoConfig.MIN_CHEAP_MODE_DISTANCE));
+		floor(h);
+		BlockPos r1 = new BlockPos(5, 1, 3), r2 = new BlockPos(5, 2, 3);
+		h.setBlock(r1, Blocks.STONE);
+		h.setBlock(r2, Blocks.STONE);
+		BlockPos b1 = h.absolutePos(r1), b2 = h.absolutePos(r2);
+		Stream s = new Stream(Level.OVERWORLD, at(h, 3, 3)).idle(60);
+		s.tick(SyntheticStreams.breakOf(b1, "minecraft:stone", "minecraft:iron_pickaxe")).idle(9);
+		long tBreak2 = s.now();
+		s.tick(SyntheticStreams.breakOf(b2, "minecraft:stone", "minecraft:iron_pickaxe")).idle(200);
+		Replay r = SyntheticStreams.replay(h, s, new Vec3(3.5, 45, 3.5));
 		h.startSequence()
-				.thenWaitUntil(() -> h.assertTrue(level.isPositionEntityTicking(base), "far chunk ticking (forced "
-						+ level.getForceLoadedChunks().contains(net.minecraft.world.level.ChunkPos.pack(cx, cz)) + ", loaded "
-						+ level.hasChunk(cx, cz) + ", base " + base + ")"))
-				.thenExecute(() -> {
-					for (int dx = -3; dx <= 3; dx++) {
-						for (int dz = -3; dz <= 3; dz++) {
-							level.setBlock(base.offset(dx, -1, dz), Blocks.STONE.defaultBlockState(), 2);
-							for (int y = 0; y <= 2; y++) level.setBlock(base.offset(dx, y, dz), Blocks.AIR.defaultBlockState(), 2);
-						}
-					}
-					level.setBlock(b1, Blocks.STONE.defaultBlockState(), 2);
-					level.setBlock(b2, Blocks.STONE.defaultBlockState(), 2);
-					Stream s = new Stream(Level.OVERWORLD, Vec3.atBottomCenterOf(base)).idle(60);
-					s.tick(SyntheticStreams.breakOf(b1, "minecraft:stone", "minecraft:iron_pickaxe")).idle(9);
-					tBreak2[0] = s.now();
-					s.tick(SyntheticStreams.breakOf(b2, "minecraft:stone", "minecraft:iron_pickaxe")).idle(20);
-					r[0] = SyntheticStreams.replay(h, s);
-				})
-				.thenWaitUntil(() -> h.assertTrue(r[0].cursor() > tBreak2[0] + 2, "echo past the breaks"))
+				.thenWaitUntil(() -> h.assertTrue(r.cursor() > tBreak2 + 2, "echo past the breaks"))
 				.thenExecute(() -> {
 					try {
-						EchoEntity e = awaitEcho(h, r[0].owner(), 1);
+						EchoEntity e = awaitEcho(h, r.owner(), 1);
 						h.assertTrue(e.isCheap(), "far echo is cheap");
 						h.assertTrue(e.isSilent(), "cheap echo is silent");
 						h.assertTrue(e.getMainHandItem().isEmpty(), "cheap echo shows no item: " + e.getMainHandItem());
-						h.assertTrue(info(h, r[0].owner(), 1).cheap(), "EchoInfo.cheap");
-						h.assertTrue(level.getBlockState(b1).isAir() && level.getBlockState(b2).isAir(), "cheap echo still breaks blocks");
-						h.assertValueEqual(r[0].echo().inventory.count("minecraft:cobblestone"), 2, "credits for the drops");
+						h.assertTrue(info(h, r.owner(), 1).cheap(), "EchoInfo.cheap");
+						h.assertTrue(h.getLevel().getBlockState(b1).isAir() && h.getLevel().getBlockState(b2).isAir(), "cheap echo still breaks blocks");
+						h.assertValueEqual(r.echo().inventory.count("minecraft:cobblestone"), 2, "credits for the drops");
 					} finally {
-						discardAll(h, ItemEntity.class, new net.minecraft.world.phys.AABB(base).inflate(8));
-						cleanup(h, r[0].owner());
-						level.setChunkForced(cx, cz, false);
+						discardAll(h, ItemEntity.class, around(h, 4));
+						cleanup(h, r.owner());
+						restore(h, before);
 					}
 				})
 				.thenSucceed();
