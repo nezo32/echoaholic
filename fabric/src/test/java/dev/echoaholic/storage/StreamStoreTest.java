@@ -186,7 +186,7 @@ class StreamStoreTest {
 		store.close();
 		store.append(OWNER, sealed(1, 20, 20)); // ring updated, write dropped with a warning
 		assertTrue(store.load(OWNER, 1).isCompletedExceptionally());
-		assertTrue(store.load(OWNER, 0).isCompletedExceptionally());
+		assertNotNull(store.load(OWNER, 0).getNow(null)); // written before close, still in memory
 		assertNotNull(store.ring(OWNER));
 		store.close(); // idempotent
 	}
