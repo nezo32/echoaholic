@@ -206,12 +206,28 @@ public final class EchoManager implements EchoListener {
 			}
 		}
 
+		// Jump pre-pass: a Teleport / Dimension at the cursor runs before anything depends on the current spot. Its move
+		// sample is already the destination (possibly in another level), and the destination may be entity-ticking
+		// while the current spot is not. Works with or without an entity.
+		if (active && st.collapseTicks == 0) {
+			DecodedSegment seg = segment(rt);
+			if (rt.removed) return GONE;
+			if (seg != null) {
+				TickEntry entry = entryAt(rt, seg, st.cursor);
+				if (hasJump(entry, st.actionsDone)) {
+					int r = runLeadingMeta(rt, entry, b);
+					if (r != ADVANCED) return r;
+					e = rt.entity;
+				}
+			}
+		}
+
 		ServerLevel level = level(rt);
 		BlockPos pos = e != null ? e.blockPosition() : scratchPos.set(st.x, st.y, st.z);
 		if (!level.isPositionEntityTicking(pos)) {
 			rt.activity = Activity.PAUSED;
 			if (e != null) {
-				e.steer(null, e.getYRot(), e.getXRot(), false);
+				stopSteer(rt, e);
 				if (++rt.unloadedTicks > MovementRules.UNLOADED_DISCARD_TICKS) {
 					snapshot(rt, e);
 					rt.entity = null;
@@ -235,7 +251,7 @@ public final class EchoManager implements EchoListener {
 		}
 
 		if (!active) {
-			e.steer(null, e.getYRot(), e.getXRot(), false);
+			stopSteer(rt, e);
 			if (st.collapseTicks > 0) e.startCollapse(st.collapseTicks); // stay down while frozen
 			rt.activity = Activity.PAUSED;
 			return FROZEN;
@@ -245,7 +261,7 @@ public final class EchoManager implements EchoListener {
 			st.collapseTicks--;
 			// the manager's hold drives the collapse: re-arm the entity so it never stands up before the hold ends
 			if (st.collapseTicks > 0) e.startCollapse(st.collapseTicks);
-			e.steer(null, e.getYRot(), e.getXRot(), false);
+			stopSteer(rt, e);
 			rt.activity = Activity.COLLAPSED;
 			return STALLED;
 		}
@@ -259,41 +275,32 @@ public final class EchoManager implements EchoListener {
 
 		long c = st.cursor;
 		TickEntry entry = entryAt(rt, seg, c);
-		// A tick with a Teleport / Dimension / Death: its move sample is already the destination, so walking there first
-		// would never succeed. Run the leading meta actions first (they relocate the echo), then check the reach.
+		// A Death (or a jump the pre-pass did not see) at the cursor: run the leading meta actions before the reach check.
 		if (hasPendingJump(entry, st.actionsDone)) {
-			List<Action> actions = entry.actions();
-			ctx.bind(rt, cfg, b, c);
-			while (st.actionsDone < actions.size() && isMeta(actions.get(st.actionsDone))) {
-				ReplayHandler.Result r = ReplayHandlers.dispatch(ctx, actions.get(st.actionsDone));
-				if (rt.removed) return GONE;
-				if (r == ReplayHandler.Result.WAIT) {
-					rt.activity = Activity.WAITING;
-					return STALLED;
-				}
-				st.actionsDone++;
-				if (rt.entity == null) return STALLED; // respawn in a level position that is not ticking yet
-			}
+			int r = runLeadingMeta(rt, entry, b);
+			if (r != ADVANCED) return r;
 			e = rt.entity;
+			if (e == null) return STALLED; // respawn in a level position that is not ticking yet
 			level = level(rt);
 		}
-		Move target = seg.positionAt(c).orElse(null);
+		double[] tgt = targetScratch;
+		boolean hasTarget = seg.positionAt(c, tgt);
 		// A jump action still pending behind a world action: do not walk, the actions run in order below.
-		if (target != null && !hasPendingJump(entry, st.actionsDone)) {
+		if (hasTarget && !hasPendingJump(entry, st.actionsDone)) {
 			if (rt.cheap) {
-				e.snapTo(target.x(), target.y(), target.z(), target.yRot(), target.xRot());
+				e.snapTo(tgt[0], tgt[1], tgt[2], (float) tgt[3], (float) tgt[4]);
 			} else {
-				double dx = target.x() - e.getX(), dy = target.y() - e.getY(), dz = target.z() - e.getZ();
+				double dx = tgt[0] - e.getX(), dy = tgt[1] - e.getY(), dz = tgt[2] - e.getZ();
 				if (!MovementRules.reached(dx, dy, dz)) {
 					double distSq = dx * dx + dy * dy + dz * dz;
 					if (rt.resync && MovementRules.isJump(distSq)) {
-						teleport(rt, target.x(), target.y(), target.z());
+						teleport(rt, tgt[0], tgt[1], tgt[2]);
 					} else {
 						rt.stuckTicks++;
-						steer(rt, e, target);
+						steer(rt, e, tgt);
 						if (rt.stuckTicks > MovementRules.STUCK_TELEPORT_TICKS
 								&& level.noCollision(e, e.getBoundingBox().move(dx, dy, dz))) {
-							teleport(rt, target.x(), target.y(), target.z());
+							teleport(rt, tgt[0], tgt[1], tgt[2]);
 						}
 						rt.resync = false;
 						rt.activity = Activity.WAITING;
@@ -341,20 +348,22 @@ public final class EchoManager implements EchoListener {
 			prefetch(rt, seg);
 		}
 
-		// Next target.
+		// Next target. A tick that jumps (Teleport / Dimension) is handled by the pre-pass: its sample may be in
+		// another level, so never walk or teleport toward it here.
 		if (st.collapseTicks > 0) {
-			e.steer(null, e.getYRot(), e.getXRot(), false);
-		} else if (!rt.cheap && nextSeg != null && nextSeg.contains(st.cursor)) {
-			Move next = nextSeg.positionAt(st.cursor).orElse(null);
-			if (next != null) {
-				if (MovementRules.isJump(e.distanceToSqr(next.x(), next.y(), next.z()))) {
-					teleport(rt, next.x(), next.y(), next.z());
+			stopSteer(rt, e);
+		} else if (!rt.cheap && nextSeg != null && nextSeg.contains(st.cursor)
+				&& !hasJump(entryAt(rt, nextSeg, st.cursor), 0)) {
+			double[] nxt = nextScratch;
+			if (nextSeg.positionAt(st.cursor, nxt)) {
+				if (MovementRules.isJump(e.distanceToSqr(nxt[0], nxt[1], nxt[2]))) {
+					teleport(rt, nxt[0], nxt[1], nxt[2]);
 				} else {
-					steer(rt, e, next);
+					steer(rt, e, nxt);
 				}
 			}
 		}
-		if (target != null) trackMovement(rt, target);
+		if (hasTarget) trackMovement(rt, tgt);
 		rt.activity = restingActivity(rt);
 
 		if (!rt.cheap && Math.floorMod(now + st.index, (long) MovementRules.TRAIL_INTERVAL) == 0) {
@@ -364,19 +373,34 @@ public final class EchoManager implements EchoListener {
 	}
 
 	/**
-	 * Starts loading the segment after {@code seg} once the cursor is within {@link MovementRules#PREFETCH_TICKS} of its
-	 * end (once per segment). The future is kept as the runtime's pending load, so {@link #segment} promotes it.
+	 * Runs the meta actions (Teleport, Dimension, Death, Pose, Swing) at the front of {@code entry}, from actionsDone.
+	 * Returns ADVANCED to continue the tick, GONE when the echo was removed, STALLED on a budget WAIT.
 	 */
-	private void prefetch(EchoRuntime rt, DecodedSegment seg) {
-		long end = seg.endTick();
-		if (end - rt.state.cursor > MovementRules.PREFETCH_TICKS || rt.prefetchedEnd == end) return;
-		SegmentMeta next = store.ring(rt.owner).segmentAtOrAfter(end).orElse(null);
-		if (next == null) return; // not sealed yet: try again next tick
-		rt.prefetchedEnd = end;
-		if (store.cached(rt.owner, next.seq()) != null) return;
-		if (rt.pending != null && rt.pendingSeq == next.seq()) return;
-		rt.pending = store.load(rt.owner, next.seq());
-		rt.pendingSeq = next.seq();
+	private int runLeadingMeta(EchoRuntime rt, TickEntry entry, BudgetScheduler.EchoBudget b) {
+		EchoState st = rt.state;
+		List<Action> actions = entry.actions();
+		ctx.bind(rt, cfg, b, st.cursor);
+		while (st.actionsDone < actions.size() && isMeta(actions.get(st.actionsDone))) {
+			ReplayHandler.Result r = ReplayHandlers.dispatch(ctx, actions.get(st.actionsDone));
+			if (rt.removed) return GONE;
+			if (r == ReplayHandler.Result.WAIT) {
+				rt.activity = Activity.WAITING;
+				return STALLED;
+			}
+			st.actionsDone++;
+		}
+		return ADVANCED;
+	}
+
+	/** True iff {@code entry} still has a Teleport or Dimension action at or after {@code from}. */
+	private static boolean hasJump(@Nullable TickEntry entry, int from) {
+		if (entry == null) return false;
+		List<Action> actions = entry.actions();
+		for (int i = from, n = actions.size(); i < n; i++) {
+			Action a = actions.get(i);
+			if (a instanceof Dimension || a instanceof Teleport) return true;
+		}
+		return false;
 	}
 
 	/** True iff {@code entry} still has a Teleport, Dimension or Death action at or after {@code from}. */
@@ -397,21 +421,34 @@ public final class EchoManager implements EchoListener {
 				|| t == ActionTypes.SWING;
 	}
 
-	private void steer(EchoRuntime rt, EchoEntity e, Move target) {
+	/** Steers toward {@code p} = x, y, z, yRot, xRot; skips the call (and its Vec3) when nothing changed. */
+	private void steer(EchoRuntime rt, EchoEntity e, double[] p) {
 		boolean freeFlight = rt.pose.fallFlying() || rt.pose.swimming();
-		e.steer(new Vec3(target.x(), target.y(), target.z()), target.yRot(), target.xRot(), freeFlight);
+		if (rt.steering && rt.steerX == p[0] && rt.steerY == p[1] && rt.steerZ == p[2] && rt.steerFree == freeFlight) return;
+		e.steer(new Vec3(p[0], p[1], p[2]), (float) p[3], (float) p[4], freeFlight);
+		rt.steering = true;
+		rt.steerX = p[0];
+		rt.steerY = p[1];
+		rt.steerZ = p[2];
+		rt.steerFree = freeFlight;
 	}
 
-	private void trackMovement(EchoRuntime rt, Move target) {
+	/** Stands still (keeps the current rotation). */
+	private static void stopSteer(EchoRuntime rt, EchoEntity e) {
+		e.steer(null, e.getYRot(), e.getXRot(), false);
+		rt.steering = false;
+	}
+
+	private void trackMovement(EchoRuntime rt, double[] p) {
 		if (Double.isNaN(rt.lastTargetX)) {
 			rt.moved = false;
 		} else {
-			double dx = target.x() - rt.lastTargetX, dy = target.y() - rt.lastTargetY, dz = target.z() - rt.lastTargetZ;
+			double dx = p[0] - rt.lastTargetX, dy = p[1] - rt.lastTargetY, dz = p[2] - rt.lastTargetZ;
 			rt.moved = dx * dx + dy * dy + dz * dz > MovementRules.MOVE_EPSILON * MovementRules.MOVE_EPSILON;
 		}
-		rt.lastTargetX = target.x();
-		rt.lastTargetY = target.y();
-		rt.lastTargetZ = target.z();
+		rt.lastTargetX = p[0];
+		rt.lastTargetY = p[1];
+		rt.lastTargetZ = p[2];
 	}
 
 	private Activity restingActivity(EchoRuntime rt) {
