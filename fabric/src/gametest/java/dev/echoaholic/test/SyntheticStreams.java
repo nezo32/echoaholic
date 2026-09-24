@@ -78,6 +78,14 @@ public final class SyntheticStreams {
 			return this;
 		}
 
+		/** Moves the recorded position without recording a tick (the next {@link #tick} records it). */
+		public Stream moveTo(Vec3 p) {
+			x = p.x;
+			y = p.y;
+			z = p.z;
+			return this;
+		}
+
 		public Stream pose(Pose p) {
 			this.pose = p;
 			return this;
