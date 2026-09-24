@@ -160,7 +160,7 @@ public class EchoSoloGameTests {
 				.thenExecute(() -> {
 					h.assertTrue(state(h, u, 1).cursor >= c0[0] + 5, "#1 moves again");
 					long lag2 = stream(h, u).streamTick - state(h, u, 2).cursor;
-					h.assertTrue(Math.abs(lag2 - 2 * DELAY) <= 2, "late #2 still lags 2*delay: " + lag2 + " (T=" + stream(h, u).streamTick
+					h.assertTrue(lag2 == 2 * DELAY, "late #2 still lags exactly 2*delay: " + lag2 + " (T=" + stream(h, u).streamTick
 							+ " c2=" + state(h, u, 2).cursor + " c1=" + state(h, u, 1).cursor + " spawn2 at T=" + spawn2[0] + ", resumed at T=" + resumeT[0] + ")");
 					cleanup(h, p);
 				})

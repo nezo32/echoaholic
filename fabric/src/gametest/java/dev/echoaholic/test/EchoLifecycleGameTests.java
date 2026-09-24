@@ -78,13 +78,13 @@ public class EchoLifecycleGameTests {
 		h.succeedWhen(() -> {
 			h.assertTrue(seen2[0] >= 0, "echo #2 not spawned yet");
 			h.assertValueEqual(seen1[0], DELAY, "T when #1 joined");
-			h.assertTrue(seen1[1] <= 1, "#1 started at cursor 0 (seen " + seen1[1] + ")");
+			h.assertValueEqual(seen1[0] - seen1[1], DELAY, "lag of #1 when it joined");
 			h.assertValueEqual(seen2[0], 2 * DELAY, "T when #2 joined");
-			h.assertTrue(seen2[1] <= 1, "#2 started at cursor 0 (seen " + seen2[1] + ")");
+			h.assertValueEqual(seen2[0] - seen2[1], 2 * DELAY, "lag of #2 when it joined");
 			long t = stream(h, u).streamTick;
 			long lag1 = t - state(h, u, 1).cursor, lag2 = t - state(h, u, 2).cursor;
-			h.assertTrue(Math.abs(lag1 - DELAY) <= 1, "lag #1 = delay, got " + lag1);
-			h.assertTrue(Math.abs(lag2 - 2 * DELAY) <= 1, "lag #2 = 2*delay, got " + lag2);
+			h.assertValueEqual(lag1, DELAY, "lag #1 (exactly k*delay)");
+			h.assertValueEqual(lag2, 2 * DELAY, "lag #2 (exactly k*delay)");
 			h.assertValueEqual(info(h, u, 2).lagTicks(), lag2, "EchoInfo lag");
 			cleanup(h, p);
 		});
@@ -291,7 +291,8 @@ public class EchoLifecycleGameTests {
 		floor(h);
 		ServerLevel nether = h.getLevel().getServer().getLevel(Level.NETHER);
 		h.assertTrue(nether != null, "the test server has a Nether");
-		BlockPos base = h.absolutePos(BlockPos.ZERO).atY(100);
+		// far away: the Nether spot is not loaded (nor near anything loaded) in the old level
+		BlockPos base = h.absolutePos(BlockPos.ZERO).offset(1500, 0, 1500).atY(100);
 		int cx = base.getX() >> 4, cz = base.getZ() >> 4;
 		nether.setChunkForced(cx, cz, true);
 		Vec3 target = Vec3.atBottomCenterOf(base.above());

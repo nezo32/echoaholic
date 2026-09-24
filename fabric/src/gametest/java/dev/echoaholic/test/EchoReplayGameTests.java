@@ -87,7 +87,7 @@ public class EchoReplayGameTests {
 					h.assertItemEntityPresent(Items.OAK_LOG, log, 2.0);
 					h.assertTrue(p.getInventory().isEmpty(), "nothing went into the owner's inventory");
 					long lag = stream(h, u).streamTick - s.cursor;
-					h.assertTrue(lag >= DELAY - 1 && lag <= DELAY + 3, "break replayed at lag == delay (" + DELAY + "), got " + lag);
+					h.assertValueEqual(lag, DELAY, "lag when the break was replayed (exactly the delay)");
 					h.assertTrue(s.cursor >= breakTick[0] + 1 && s.cursor <= breakTick[0] + 2,
 							"cursor just past the break tick " + breakTick[0] + ": " + s.cursor);
 				})
