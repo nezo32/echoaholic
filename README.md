@@ -126,7 +126,7 @@ lists them all, `/echoaholic config <key>` shows one). Values outside the range 
 When an action is over budget, it waits: the echo's replay stops at that action and tries again next tick, and the
 echoes take turns so that none of them starves. Nothing is dropped; the echo just falls a little further behind.
 
-<!-- PERF --> Measured server cost: _numbers pending (EchoPerfGameTests)._
+Measured server cost (`EchoPerfGameTests`: 32 echoes replaying a dense mining session, 200 ticks, GitHub-class CI runner): the whole replay loop takes **about 1.5–2.5 ms per tick on average** (p95 3–4.3 ms, worst tick under 15 ms) on both 26.2 and 26.3, with at most 17 of the 128 global block operations used per tick and nothing deferred. The test fails if the average goes above 3 ms or any tick above 20 ms.
 
 ## Commands
 
@@ -207,9 +207,11 @@ Echoes are never saved in chunks: they are rebuilt from `world.dat` when the wor
 background thread, and segments older than `bufferHours` are deleted. `/echoaholic clear` deletes that player's
 files.
 
-Measured size (the core `SegmentSizeTest`): about **389 KiB per hour** of dense play (walking or sprinting every tick,
+Measured size (the core `SegmentSizeTest`, a synthetic worst case): about **389 KiB per hour** of dense play (walking or sprinting every tick,
 a block broken every half second, a block placed every 2 seconds, a hit every 5 seconds, a shot every 30 seconds),
-about **2.2 KiB per idle hour**, so about **2.3 MiB per player** for the default 6 hour buffer.
+about **2.2 KiB per idle hour**, so about **2.3 MiB per player** for the default 6 hour buffer. Recorded in-game streams are smaller: the gametests
+measured about 82 KiB per hour of dense mining and about 42 KiB per hour of ordinary walking with a block action every
+~10 s.
 
 ## Repository layout
 
