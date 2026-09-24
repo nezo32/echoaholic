@@ -174,7 +174,7 @@ public class EchoPersistenceGameTests {
 		UUID u = UUID.randomUUID();
 		Path ownerDir = dir.resolve(u.toString());
 		SyntheticStreams.Stream s = new SyntheticStreams.Stream(Level.OVERWORLD, new Vec3(0.5, 64, 0.5)).idle(3);
-		for (int i = 0; i < 12; i++) s.walkTo(new Vec3(i * 3 + 0.5, 64, 0.5), 0.25).idle(1);
+		for (int i = 0; i < 5; i++) s.walkTo(new Vec3(i * 3 + 0.5, 64, 0.5), 0.25).idle(1); // 57 ticks
 		s.idle(100 - (int) s.length());
 		List<SealedSegment> segs = s.finish();
 		h.assertValueEqual(segs.size(), 5, "segments of 20 ticks");
