@@ -227,9 +227,21 @@ public class EchoReplayGameTests {
 		double[] worst = {0};
 		long[] worstTick = {-1};
 		long[] lagStart = {-1};
+		StringBuilder trace = new StringBuilder();
+		long[] lastLag = {-1};
 		h.onEachTick(() -> {
 			EchoEntity e = manager(h).entity(r.owner(), 1);
 			long c = r.cursor();
+			long lagNow = stream(h, r.owner()).streamTick - c;
+			if (trace.length() < 20000 && lagNow != lastLag[0]) {
+				lastLag[0] = lagNow;
+				trace.append("\n t=").append(h.getTick()).append(" c=").append(c)
+						.append(" T=").append(stream(h, r.owner()).streamTick)
+						.append(" e=").append(e == null ? "null" : h.relativeVec(e.position()))
+						.append(" tgt=").append(c < path.size() ? h.relativeVec(path.get((int) c)) : "-")
+						.append(" act=").append(manager(h).list(r.owner()).isEmpty() ? "-" : manager(h).list(r.owner()).get(0).activity())
+						.append(" streaming=").append(TestSupport.es(h).recorder().isStreaming(r.owner()));
+			}
 			if (e == null || c <= 0 || c >= path.size()) return;
 			if (lagStart[0] < 0) lagStart[0] = stream(h, r.owner()).streamTick - c;
 			double d = horizontal(e.position(), path.get((int) c));
@@ -242,6 +254,7 @@ public class EchoReplayGameTests {
 			h.assertTrue(r.cursor() >= path.size() - 1, "echo at the end of the path (cursor " + r.cursor() + ")");
 			h.assertTrue(worst[0] <= 1.0, "max horizontal deviation " + worst[0] + " at stream tick " + worstTick[0]);
 			long lagGrowth = stream(h, r.owner()).streamTick - r.cursor() - lagStart[0];
+			if (lagGrowth > 5) System.out.println("ECHO_TRACE echoFollowsPath" + trace);
 			h.assertTrue(lagGrowth <= 5, "free path must not stall; lag grew by " + lagGrowth);
 			cleanup(h, r.owner());
 		});
