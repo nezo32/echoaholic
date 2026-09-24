@@ -1,0 +1,11 @@
+# Component-specific ignores live in fabric/.gitignore.
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+# local secrets (e.g. a CurseForge token used for a dry run)
+.env
+.env.*
+*.log

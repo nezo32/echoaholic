@@ -1,0 +1,106 @@
+# Release caller for the reusable release pipeline (tag -> version -> build -> GitHub release -> CurseForge).
+# Guide: https://github.com/nezo32/enchantaholic/blob/main/docs/ci/REUSABLE_RELEASE_PIPELINE.md
+#
+# HOW TO USE
+#   1. Copy this file to <your-repo>/.github/workflows/release.yml.
+#   2. Replace every "@main" below with a full commit SHA of nezo32/enchantaholic (recommended), e.g.
+#        sed -i 's/@main$/@<40-char-sha>/' .github/workflows/release.yml
+#      "@main" works too but picks up every change to the pipeline immediately.
+#   3. Review the lines marked PROJECT-SPECIFIC (build tool, working directory, artifact globs).
+#   4. Configure the repo (Settings -> Secrets and variables -> Actions):
+#        secret CURSEFORGE_TOKEN          CurseForge Upload API token        (only if publishing to CurseForge)
+#        var    CURSEFORGE_PROJECT_ID     numeric project id; EMPTY = CurseForge job is skipped
+#        var    CURSEFORGE_GAME_VERSIONS  CF version names, e.g. "26.2,26.3,Fabric,Java 25,Client,Server"
+#        var    CURSEFORGE_RELATIONS      optional, e.g. "fabric-api:requiredDependency"
+#   5. Push a tag vX.Y.Z[-pre] on a commit of the default branch. Build contract: -Pmod_version=<version>
+#      for Gradle, env VERSION for Node; the version comes only from the tag.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build, release and publish, e.g. v1.2.3
+        required: true
+      skip-curseforge:
+        description: Only (re)build and update the GitHub release; do not upload to CurseForge
+        type: boolean
+        default: false
+      curseforge-dry-run:
+        description: Resolve CurseForge versions and print the upload metadata without uploading
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    uses: nezo32/enchantaholic/.github/workflows/reusable-version.yml@main
+    with:
+      tag: ${{ inputs.tag }}
+      release-branch: ${{ github.event.repository.default_branch }}
+
+  # PROJECT-SPECIFIC: Gradle build (Fabric/NeoForge/Forge/plain Java). For Node, use the block below instead.
+  build:
+    needs: version
+    uses: nezo32/enchantaholic/.github/workflows/reusable-build-gradle.yml@main
+    with:
+      ref: ${{ needs.version.outputs.tag }}
+      working-directory: "."            # PROJECT-SPECIFIC: directory containing gradlew
+      java-version: "25"                # PROJECT-SPECIFIC
+      version: ${{ needs.version.outputs.version }}
+      artifact-name: dist
+      artifact-files: build/libs/*.jar  # PROJECT-SPECIFIC: newline-separated extglobs
+
+  # PROJECT-SPECIFIC: Node alternative (e.g. a Bedrock add-on). The build reads env VERSION.
+  # build:
+  #   needs: version
+  #   uses: nezo32/enchantaholic/.github/workflows/reusable-build-node.yml@main
+  #   with:
+  #     ref: ${{ needs.version.outputs.tag }}
+  #     working-directory: "."
+  #     node-version: "24"
+  #     check-command: npm run typecheck --if-present && npm run lint --if-present && npm test --if-present
+  #     build-command: npm run package
+  #     version: ${{ needs.version.outputs.version }}
+  #     artifact-name: dist
+  #     artifact-files: dist/*
+
+  github-release:
+    needs: [version, build]
+    permissions:
+      contents: write
+    uses: nezo32/enchantaholic/.github/workflows/reusable-github-release.yml@main
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+      name: ${{ github.event.repository.name }} ${{ needs.version.outputs.version }}
+      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+      artifact-pattern: dist
+
+  # Delete this job if the project is not on CurseForge. It is skipped (with a warning) while CURSEFORGE_PROJECT_ID is unset.
+  curseforge:
+    needs: [version, github-release]
+    if: ${{ !inputs.skip-curseforge }}
+    uses: nezo32/enchantaholic/.github/workflows/reusable-publish-curseforge.yml@main
+    with:
+      # Read inside the job, so the variable may live at repository level or in the Environment below.
+      project-id-var: CURSEFORGE_PROJECT_ID
+      environment: ${{ vars.CURSEFORGE_ENVIRONMENT || '' }}   # optional: Environment holding the CurseForge vars/secret
+      artifact-pattern: dist
+      primary-file: "!(*-sources).jar"     # PROJECT-SPECIFIC: must match exactly one file (Node: e.g. "*.mcaddon")
+      additional-files: "*-sources.jar"    # PROJECT-SPECIFIC: "" = no child files
+      game-versions: ${{ vars.CURSEFORGE_GAME_VERSIONS }}
+      relations: ${{ vars.CURSEFORGE_RELATIONS || '' }}
+      release-type: ${{ needs.version.outputs.release-type }}
+      display-name: ${{ github.event.repository.name }} ${{ needs.version.outputs.version }}
+      tag: ${{ needs.version.outputs.tag }}
+      dry-run: ${{ inputs.curseforge-dry-run == true }}
+    secrets:
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}

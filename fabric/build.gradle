@@ -1,0 +1,113 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+// Target Minecraft version: 26.3 by default, override with -Pmc=26.2.
+def mc = project.property('mc').toString()
+def fabricApiVersion = project.findProperty("fabric_api_${mc.replace('.', '_')}")
+if (fabricApiVersion == null) {
+	throw new GradleException("Unsupported -Pmc=${mc}. Supported: 26.3, 26.2")
+}
+
+def modMenuVersion = project.property("modmenu_${mc.replace('.', '_')}")
+
+repositories {
+	// Mod Menu: only from TerraformersMC, never looked up on Maven Central
+	exclusiveContent {
+		forRepository {
+			maven {
+				name = "TerraformersMC"
+				url = "https://maven.terraformersmc.com/releases/"
+			}
+		}
+		filter { includeGroup "com.terraformersmc" }
+	}
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"echoaholic" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+fabricApi {
+	// creates the src/gametest source set + runGameTest (server, headless, part of `build`)
+	// and runClientGameTest (needs a display) tasks
+	configureTests {
+		createSourceSet = true
+		modId = "echoaholic-gametest"
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${mc}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${fabricApiVersion}"
+	// optional integration: compile against the API only; never on the runtime classpath or in the jar
+	clientCompileOnly "com.terraformersmc:modmenu:${modMenuVersion}"
+
+	testImplementation "org.junit.jupiter:junit-jupiter:5.13.4"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	// working dir defaults to the project dir (CorePurityTest reads src/main/java)
+	useJUnitPlatform()
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+	withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+// Drop jars of other versions from build/libs so a release build (-Pmod_version=X) without `clean`
+// leaves exactly one mod jar (plus its sources jar) behind.
+def deleteStaleJars = tasks.register('deleteStaleJars', Delete) {
+	def libs = base.libsDirectory
+	def name = project.archives_base_name
+	def current = project.version.toString()
+	delete fileTree(libs) {
+		include "${name}-*.jar"
+		exclude "${name}-${current}.jar", "${name}-${current}-sources.jar"
+	}
+}
+tasks.named('jar') { dependsOn deleteStaleJars }
+tasks.named('sourcesJar') { dependsOn deleteStaleJars }
+
+tasks.named('jar') {
+	def license = rootProject.file('../LICENSE')
+	if (license.exists()) {
+		from(license) {
+			rename { "LICENSE_echoaholic" }
+		}
+	}
+}

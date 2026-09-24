@@ -1,0 +1,79 @@
+# Creates (or updates, if it already exists) the GitHub release for a tag and attaches build artifacts.
+name: reusable / github-release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      name:
+        description: Release title (empty = tag).
+        type: string
+        default: ""
+      prerelease:
+        type: boolean
+        default: false
+      draft:
+        type: boolean
+        default: false
+      generate-notes:
+        description: Auto-generate notes from merged PRs (categories from .github/release.yml).
+        type: boolean
+        default: true
+      artifact-pattern:
+        description: download-artifact pattern selecting artifacts to attach.
+        type: string
+        default: "*"
+      files:
+        description: Globs (relative to the download dir) of files to attach.
+        type: string
+        default: "**/*"
+    outputs:
+      url:
+        value: ${{ jobs.release.outputs.url }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      url: ${{ steps.release.outputs.url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ inputs.artifact-pattern }}
+          path: dist
+          merge-multiple: true
+
+      - run: ls -laR dist
+
+      # Generate the notes ourselves and pass them as the full body: letting the action generate them
+      # appends a fresh copy to the existing body every time a tag is re-run.
+      - name: Generate release notes
+        if: inputs.generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/notes.md"
+
+      - id: release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.name || inputs.tag }}
+          prerelease: ${{ inputs.prerelease }}
+          draft: ${{ inputs.draft }}
+          body_path: ${{ inputs.generate-notes && format('{0}/notes.md', runner.temp) || '' }}
+          append_body: false
+          # legacy = GitHub picks latest by date + SemVer, so re-running an old tag does not make it "latest"
+          make_latest: ${{ inputs.prerelease && 'false' || 'legacy' }}
+          working_directory: dist
+          files: ${{ inputs.files }}
+          fail_on_unmatched_files: true
+          overwrite_files: true

@@ -1,0 +1,344 @@
+# Publishes build artifacts to CurseForge via the CurseForge Upload API (curl + jq, no 3rd-party action).
+# The job is skipped when project-id is empty, so callers can make CurseForge optional per project.
+name: reusable / publish-curseforge
+
+on:
+  workflow_call:
+    inputs:
+      project-id:
+        description: Numeric CurseForge project id. Empty = read it from the variable named by project-id-var.
+        type: string
+        default: ""
+      project-id-var:
+        description: Name of a repository or environment variable holding the project id (used when project-id is empty). Unset/empty variable = skip with a warning.
+        type: string
+        default: ""
+      environment:
+        description: GitHub Environment to run the upload job in (its variables and secrets become available, and its protection rules apply). Empty = none.
+        type: string
+        default: ""
+      api-base:
+        description: "Per-game Upload API host (Java edition: https://minecraft.curseforge.com)"
+        type: string
+        default: https://minecraft.curseforge.com
+      artifact-pattern:
+        description: download-artifact pattern selecting the artifacts to publish.
+        type: string
+        required: true
+      primary-file:
+        description: Bash extglob (relative to the download dir) matching exactly ONE primary file.
+        type: string
+        default: "!(*-@(sources|dev|javadoc)).jar"
+      additional-files:
+        description: Bash extglob for child files attached to the primary one (e.g. *-sources.jar). Empty = none.
+        type: string
+        default: ""
+      game-versions:
+        description: Comma/newline separated CurseForge version names, e.g. "26.2,26.3,Fabric,Java 25,Client,Server".
+        type: string
+        required: true
+      version-type-prefixes:
+        description: Version-type slug prefixes to resolve names in. "" = all types.
+        type: string
+        default: minecraft,modloader,java,environment
+      release-type:
+        description: release | beta | alpha
+        type: string
+        default: release
+      display-name:
+        description: Display name on CurseForge (empty = file name).
+        type: string
+        default: ""
+      relations:
+        description: '"slug:type,..." e.g. "fabric-api:requiredDependency,modmenu:optionalDependency"'
+        type: string
+        default: ""
+      changelog:
+        description: Changelog markdown. Empty = body of the GitHub release for `tag`.
+        type: string
+        default: ""
+      tag:
+        description: Tag whose GitHub release body is used as changelog when `changelog` is empty.
+        type: string
+        default: ""
+      dry-run:
+        description: Resolve names and print the upload metadata without uploading (file-id output is 0).
+        type: boolean
+        default: false
+    secrets:
+      curseforge-token:
+        description: CurseForge Upload API token (authors portal -> API tokens).
+        required: false
+      CURSEFORGE_TOKEN:
+        description: Same token under its conventional name; an Environment secret of this name wins when `environment` is set.
+        required: false
+    outputs:
+      file-id:
+        value: ${{ jobs.publish.outputs.file-id }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: inputs.project-id != '' || inputs.project-id-var != ''
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 15
+    outputs:
+      file-id: ${{ steps.upload.outputs.file-id }}
+    steps:
+      # Environment-level variables are only visible inside the job, so the id is resolved here, not in `if:`.
+      - name: Resolve project id
+        id: project
+        env:
+          PROJECT_ID: ${{ inputs.project-id || vars[inputs.project-id-var] }}
+          VAR_NAME: ${{ inputs.project-id-var }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [[ -z "$PROJECT_ID" ]]; then
+            echo "::warning::CurseForge upload skipped: variable '${VAR_NAME}' is not set (environment: '${ENVIRONMENT:-none}')"
+            echo "### CurseForge upload skipped — variable \`${VAR_NAME}\` not set" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v8
+        if: steps.project.outputs.id != ''
+        with:
+          pattern: ${{ inputs.artifact-pattern }}
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve changelog
+        if: steps.project.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGELOG: ${{ inputs.changelog }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/changelog.md"
+          if [[ -n "$CHANGELOG" ]]; then
+            printf '%s\n' "$CHANGELOG" > "$f"
+          elif [[ -n "$TAG" ]] && gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$f" 2>/dev/null && [[ -s "$f" ]]; then
+            echo "Using body of GitHub release $TAG"
+          else
+            echo "See ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}" > "$f"
+          fi
+          # the changelog is built from PR titles: print it with workflow commands (::...::) disabled
+          stop="$(openssl rand -hex 16)"
+          echo "::stop-commands::$stop"; cat "$f"; echo "::$stop::"
+
+      # BEGIN inlined scripts/curseforge-upload.sh (checked by scripts/check-inlined-script.sh)
+      # A called workflow cannot read files of the repo that hosts it, so the script is inlined byte-for-byte.
+      # Edit scripts/curseforge-upload.sh first, then paste it here (indented 10 spaces).
+      - name: Write upload script
+        if: steps.project.outputs.id != ''
+        run: |
+          cat > "$RUNNER_TEMP/curseforge-upload.sh" <<'CF_UPLOAD_SCRIPT'
+          #!/usr/bin/env bash
+          # curseforge-upload.sh — upload one primary file (+ optional child files) to CurseForge
+          # via the legacy "Upload API" (https://support.curseforge.com/.../9000197321-curseforge-upload-api).
+          # Dependencies: bash, curl, jq (all preinstalled on ubuntu-latest runners).
+          #
+          # Usage: curseforge-upload.sh <primary-file> [additional-file ...]
+          #
+          # Environment:
+          #   CF_TOKEN            (required) API token (Authors portal -> API tokens). Sent as X-Api-Token.
+          #   CF_PROJECT_ID       (required) numeric project id.
+          #   CF_API_BASE         default https://minecraft.curseforge.com  (per-game host; Bedrock: https://minecraft-bedrock.curseforge.com)
+          #   CF_GAME_VERSIONS    names, comma/newline separated, e.g. "26.2,26.3,Fabric,Java 25,Client,Server"
+          #   CF_TYPE_PREFIXES    comma list of version-type slug prefixes to search in.
+          #                       default "minecraft,modloader,java,environment"; set to "" to search all types
+          #                       (required for Bedrock, whose /game/version-types returns no list; types are then not fetched).
+          #   CF_RELEASE_TYPE     release | beta | alpha                      (default release)
+          #   CF_DISPLAY_NAME     display name of the primary file           (default: file name)
+          #   CF_CHANGELOG        changelog text (or CF_CHANGELOG_FILE=path)
+          #   CF_CHANGELOG_TYPE   markdown | text | html                     (default markdown)
+          #   CF_RELATIONS        "slug:type,slug:type"  type in requiredDependency|optionalDependency|
+          #                       embeddedLibrary|tool|incompatible          e.g. "fabric-api:requiredDependency"
+          #   CF_DRY_RUN          "true" = resolve ids and print metadata, do not upload
+          #   CF_RETRY_DELAY      seconds between retries (default 5; uploads wait twice as long). GETs retry on
+          #                       network errors, 408/429/5xx; uploads retry only when CurseForge was never reached
+          #                       (DNS/connect/TLS), because a POST that got through may have created the file.
+          #   CF_VERSIONS_JSON / CF_TYPES_JSON  optional local JSON files instead of calling the API (testing)
+          # Outputs (when $GITHUB_OUTPUT is set): file-id, file-ids (comma list)
+          set -euo pipefail
+
+          die() { echo "::error::$*" >&2; exit 1; }
+
+          for c in curl jq; do command -v "$c" >/dev/null 2>&1 || die "$c is required but not installed"; done
+          [[ $# -ge 1 ]] || die "usage: $0 <primary-file> [additional-file ...]"
+          : "${CF_PROJECT_ID:?CF_PROJECT_ID is required}"
+          [[ "$CF_PROJECT_ID" =~ ^[0-9]+$ ]] || die "CF_PROJECT_ID must be numeric (got '$CF_PROJECT_ID')"
+          if [[ "${CF_DRY_RUN:-false}" != "true" ]]; then : "${CF_TOKEN:?CF_TOKEN is required}"; fi
+          for f in "$@"; do [[ -f "$f" ]] || die "file not found: $f"; done
+          [[ "${CF_GAME_VERSIONS:-}" =~ [^[:space:],] ]] || die "no game versions given (CF_GAME_VERSIONS)"
+          RETRY_DELAY="${CF_RETRY_DELAY:-5}"
+          [[ "$RETRY_DELAY" =~ ^[0-9]+$ ]] || die "CF_RETRY_DELAY must be a number of seconds"
+
+          API="${CF_API_BASE:-https://minecraft.curseforge.com}"; API="${API%/}/api"
+          RELEASE_TYPE="${CF_RELEASE_TYPE:-release}"
+          case "$RELEASE_TYPE" in release|beta|alpha) ;; *) die "CF_RELEASE_TYPE must be release|beta|alpha";; esac
+          TYPE_PREFIXES="${CF_TYPE_PREFIXES-minecraft,modloader,java,environment}"
+
+          cf_get() { # $1 = path
+            curl -fsS --retry 4 --retry-connrefused --retry-delay "$RETRY_DELAY" \
+              -H "X-Api-Token: ${CF_TOKEN:-}" "$API$1"
+          }
+
+          tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          if [[ -n "${CF_VERSIONS_JSON:-}" ]]; then cp "$CF_VERSIONS_JSON" "$tmp/versions.json"; else cf_get /game/versions > "$tmp/versions.json"; fi
+          # version types are only needed to filter by slug prefix; some hosts (e.g. Bedrock) return no usable list
+          if [[ -z "$TYPE_PREFIXES" ]]; then echo '[]' > "$tmp/types.json"
+          elif [[ -n "${CF_TYPES_JSON:-}" ]]; then cp "$CF_TYPES_JSON" "$tmp/types.json"
+          else cf_get /game/version-types > "$tmp/types.json"; fi
+          jq -e 'type == "array"' "$tmp/versions.json" >/dev/null 2>&1 || die "GET /game/versions did not return a JSON array (check CF_API_BASE / CF_TOKEN)"
+          if [[ -n "$TYPE_PREFIXES" ]] && ! jq -e 'type == "array" and length > 0' "$tmp/types.json" >/dev/null 2>&1; then
+            die "GET /game/version-types returned no version types; set CF_TYPE_PREFIXES=\"\" to search all types"
+          fi
+
+          # --- resolve game version names -> ids -------------------------------------------------
+          ids_json='[]'
+          while IFS= read -r name; do
+            name="$(echo "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [[ -z "$name" ]] && continue
+            matches="$(jq -c --arg name "$name" --arg prefixes "$TYPE_PREFIXES" --slurpfile types "$tmp/types.json" '
+                ($prefixes | split(",") | map(select(length > 0))) as $p
+              | (if ($p | length) == 0 then null
+                 else $types[0] | map(select(.slug as $s | any($p[]; . as $x | $s | startswith($x)))) | map(.id) end) as $allowed
+              | [ .[] | select((.name | ascii_downcase) == ($name | ascii_downcase))
+                      | select($allowed == null or (.gameVersionTypeID as $t | $allowed | index($t) != null)) ]
+              | map({id, name, gameVersionTypeID})' "$tmp/versions.json")"
+            count="$(jq 'length' <<<"$matches")"
+            if [[ "$count" -eq 0 ]]; then
+              hint="$(jq -r --arg n "${name%%.*}" '[.[] | select(.name | startswith($n)) | .name] | unique | .[:15] | join(", ")' "$tmp/versions.json")"
+              die "CurseForge game version '$name' not found (type prefixes: '${TYPE_PREFIXES}'). Similar: ${hint:-none}"
+            fi
+            if [[ "$count" -gt 1 ]]; then
+              echo "::warning::'$name' matched $count versions ($(jq -c 'map(.id)' <<<"$matches")); using the highest id"
+            fi
+            id="$(jq 'max_by(.id).id' <<<"$matches")"
+            echo "resolved '$name' -> $id"
+            ids_json="$(jq -c --argjson id "$id" '. + [$id] | unique' <<<"$ids_json")"
+          done < <(tr ',' '\n' <<<"${CF_GAME_VERSIONS:-}")
+
+          [[ "$(jq length <<<"$ids_json")" -gt 0 ]] || die "no game versions given (CF_GAME_VERSIONS)"
+
+          # --- changelog / relations -----------------------------------------------------------
+          changelog="${CF_CHANGELOG:-}"
+          if [[ -z "$changelog" && -n "${CF_CHANGELOG_FILE:-}" ]]; then changelog="$(cat "$CF_CHANGELOG_FILE")"; fi
+          [[ -n "$changelog" ]] || changelog="No changelog provided."
+
+          relations='[]'
+          IFS=',' read -r -a rels <<<"${CF_RELATIONS:-}"
+          for r in "${rels[@]}"; do
+            r="$(echo "$r" | tr -d '[:space:]')"; [[ -z "$r" ]] && continue
+            slug="${r%%:*}"; rtype="${r#*:}"; [[ "$rtype" == "$r" ]] && rtype=requiredDependency
+            case "$rtype" in requiredDependency|optionalDependency|embeddedLibrary|tool|incompatible) ;;
+              *) die "bad relation type '$rtype' for '$slug'";; esac
+            relations="$(jq -c --arg s "$slug" --arg t "$rtype" '. + [{slug:$s, type:$t}]' <<<"$relations")"
+          done
+
+          # --- upload ---------------------------------------------------------------------------
+          upload() { # $1 = file, $2 = metadata json
+            if [[ "${CF_DRY_RUN:-false}" == "true" ]]; then
+              echo "[dry-run] POST $API/projects/$CF_PROJECT_ID/upload-file  file=$1" >&2
+              jq . <<<"$2" >&2; echo 0; return
+            fi
+            local resp code rc attempt
+            # metadata goes through a file: an inline -F value would be cut at the first ';' (e.g. in the changelog)
+            printf '%s' "$2" > "$tmp/metadata.json"
+            # CurseForge uploads are not idempotent: only retry when the request never reached the server
+            # (curl exit 5/6 = DNS, 7 = connect, 35 = TLS handshake). HTTP errors and timeouts are never re-sent.
+            for attempt in 1 2 3 4; do
+              rc=0
+              resp="$(curl -sS -w '\n%{http_code}' \
+                -H "X-Api-Token: $CF_TOKEN" \
+                -F "metadata=<$tmp/metadata.json;type=application/json" \
+                -F "file=@$1" \
+                "$API/projects/$CF_PROJECT_ID/upload-file")" || rc=$?
+              case "$rc" in 5|6|7|35) [[ $attempt -lt 4 ]] || break ;; *) break ;; esac
+              echo "::warning::could not reach $API (curl exit $rc), retrying in $((RETRY_DELAY * 2))s" >&2
+              sleep "$((RETRY_DELAY * 2))"
+            done
+            local check="check the project's Files page on CurseForge before re-running: the file may have been created"
+            [[ $rc -eq 0 ]] || die "upload of $1 failed (curl exit $rc); $check"
+            code="${resp##*$'\n'}"; resp="${resp%$'\n'*}"
+            if [[ "$code" == 5* ]]; then die "upload of $1 failed (HTTP $code): $resp; $check"; fi
+            [[ "$code" == 2* ]] || die "upload of $1 failed (HTTP $code): $resp"
+            jq -er '.id' <<<"$resp" || die "unexpected response: $resp"
+          }
+
+          primary="$1"; shift
+          meta="$(jq -nc \
+            --arg changelog "$changelog" \
+            --arg ctype "${CF_CHANGELOG_TYPE:-markdown}" \
+            --arg name "${CF_DISPLAY_NAME:-$(basename "$primary")}" \
+            --arg rtype "$RELEASE_TYPE" \
+            --argjson gv "$ids_json" \
+            --argjson rel "$relations" \
+            '{changelog:$changelog, changelogType:$ctype, displayName:$name, gameVersions:$gv, releaseType:$rtype}
+             + (if ($rel | length) > 0 then {relations:{projects:$rel}} else {} end)')"
+          file_id="$(upload "$primary" "$meta")"
+          done_msg="uploaded"; [[ "${CF_DRY_RUN:-false}" == "true" ]] && done_msg="[dry-run] not uploaded"
+          echo "$done_msg $primary -> file id $file_id"
+          all_ids="$file_id"
+
+          # child files (e.g. sources jar) are attached to the primary via parentFileID; they must NOT carry gameVersions
+          for extra in "$@"; do
+            child_meta="$(jq -nc --arg changelog "$changelog" --arg ctype "${CF_CHANGELOG_TYPE:-markdown}" \
+              --arg rtype "$RELEASE_TYPE" --argjson parent "$file_id" --arg name "$(basename "$extra")" \
+              '{changelog:$changelog, changelogType:$ctype, displayName:$name, parentFileID:$parent, releaseType:$rtype}')"
+            cid="$(upload "$extra" "$child_meta")"
+            echo "$done_msg $extra -> file id $cid (child of $file_id)"
+            all_ids="$all_ids,$cid"
+          done
+
+          if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+            { echo "file-id=$file_id"; echo "file-ids=$all_ids"; } >> "$GITHUB_OUTPUT"
+          fi
+          CF_UPLOAD_SCRIPT
+      # END inlined scripts/curseforge-upload.sh (checked by scripts/check-inlined-script.sh)
+
+      - name: Upload to CurseForge
+        id: upload
+        if: steps.project.outputs.id != ''
+        working-directory: dist
+        env:
+          CF_TOKEN: ${{ secrets.curseforge-token || secrets.CURSEFORGE_TOKEN }}
+          CF_PROJECT_ID: ${{ steps.project.outputs.id }}
+          CF_API_BASE: ${{ inputs.api-base }}
+          CF_GAME_VERSIONS: ${{ inputs.game-versions }}
+          CF_TYPE_PREFIXES: ${{ inputs.version-type-prefixes }}
+          CF_RELEASE_TYPE: ${{ inputs.release-type }}
+          CF_DISPLAY_NAME: ${{ inputs.display-name }}
+          CF_RELATIONS: ${{ inputs.relations }}
+          CF_DRY_RUN: ${{ inputs.dry-run }}
+          PRIMARY: ${{ inputs.primary-file }}
+          ADDITIONAL: ${{ inputs.additional-files }}
+        run: |
+          set -euo pipefail
+          shopt -s extglob nullglob
+          export CF_CHANGELOG_FILE="$RUNNER_TEMP/changelog.md"
+          # shellcheck disable=SC2206
+          primary=( $PRIMARY )
+          [[ ${#primary[@]} -eq 1 ]] || { echo "::error::primary-file '$PRIMARY' matched ${#primary[@]} files: ${primary[*]:-none}"; ls -la; exit 1; }
+          extra=()
+          # shellcheck disable=SC2206
+          [[ -n "$ADDITIONAL" ]] && extra=( $ADDITIONAL )
+          if [[ -n "$ADDITIONAL" && ${#extra[@]} -eq 0 ]]; then echo "::warning::additional-files '$ADDITIONAL' matched no files"; fi
+          bash "$RUNNER_TEMP/curseforge-upload.sh" "${primary[0]}" "${extra[@]}"
+
+      - name: Summary
+        if: steps.upload.outputs.file-id != ''
+        env:
+          FILE_ID: ${{ steps.upload.outputs.file-id }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [[ "$DRY_RUN" == true ]]; then
+            echo "### CurseForge dry run OK — project $PROJECT_ID, versions resolved, nothing uploaded" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### CurseForge upload OK — project $PROJECT_ID, file id $FILE_ID" >> "$GITHUB_STEP_SUMMARY"
+          fi

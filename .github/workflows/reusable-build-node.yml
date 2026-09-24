@@ -1,0 +1,100 @@
+# Builds a Node/TypeScript project (e.g. Bedrock add-on via esbuild) and uploads its package.
+name: reusable / build-node
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+      working-directory:
+        type: string
+        default: "."
+      node-version:
+        type: string
+        default: "24"
+      install-command:
+        type: string
+        default: npm ci
+      check-command:
+        description: Lint/typecheck/test command (empty = skip).
+        type: string
+        default: ""
+      build-command:
+        type: string
+        default: npm run build
+      version:
+        description: Exposed to the build as env VERSION (build script should write it into manifest.json).
+        type: string
+        default: ""
+      artifact-name:
+        type: string
+        default: node-dist
+      artifact-files:
+        description: Newline-separated bash globs (extglob on), relative to working-directory.
+        type: string
+        default: dist/*.mcaddon
+      retention-days:
+        type: number
+        default: 7
+    outputs:
+      artifact-name:
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      artifact-name: ${{ inputs.artifact-name }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install
+        run: ${{ inputs.install-command }}
+
+      - name: Check
+        if: inputs.check-command != ''
+        run: ${{ inputs.check-command }}
+
+      - name: Build
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ${{ inputs.build-command }}
+
+      - name: Stage artifacts
+        env:
+          FILES: ${{ inputs.artifact-files }}
+        run: |
+          set -euo pipefail
+          shopt -s extglob nullglob globstar
+          out="$RUNNER_TEMP/artifact"; mkdir -p "$out"
+          while IFS= read -r pattern; do
+            [[ -z "${pattern// }" ]] && continue
+            # shellcheck disable=SC2206
+            matches=( $pattern )
+            [[ ${#matches[@]} -gt 0 ]] || { echo "::error::no files match '$pattern'"; exit 1; }
+            cp -v "${matches[@]}" "$out/"
+          done <<< "$FILES"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/artifact/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

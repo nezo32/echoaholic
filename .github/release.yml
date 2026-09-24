@@ -1,0 +1,18 @@
+# Categories for GitHub auto-generated release notes (used by generate_release_notes).
+changelog:
+  exclude:
+    labels: [skip-changelog]
+    authors: [dependabot, renovate]
+  categories:
+    - title: Breaking changes
+      labels: [breaking]
+    - title: New features
+      labels: [enhancement]
+    - title: Bug fixes
+      labels: [bug]
+    - title: Documentation
+      labels: [documentation]
+    - title: Maintenance
+      labels: [chore, dependencies]
+    - title: Other changes
+      labels: ["*"]
