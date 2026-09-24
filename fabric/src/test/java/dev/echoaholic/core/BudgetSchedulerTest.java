@@ -112,6 +112,36 @@ class BudgetSchedulerTest {
 		assertEquals(List.of("z"), s.order(List.of("z")));
 	}
 
+	@Test
+	void orderIntoReusedList() {
+		BudgetScheduler s = new BudgetScheduler();
+		List<String> echoes = List.of("a", "b", "c");
+		List<String> out = new ArrayList<>(List.of("junk"));
+		s.beginTick(1, 1);
+		s.beginTick(1, 1);
+		assertSame(out, s.order(echoes, out));
+		assertEquals(List.of("b", "c", "a"), out);
+		assertEquals(s.order(echoes), s.order(echoes, out));
+		assertEquals(List.of(), s.order(List.<String>of(), out));
+	}
+
+	@Test
+	void budgetsAreReusedAndRefilledEachTick() {
+		BudgetScheduler s = new BudgetScheduler();
+		s.beginTick(10, 1);
+		EchoBudget a = s.forEcho("a", 1, 1);
+		assertTrue(a.tryBlockOp());
+		assertTrue(a.tryEntityLookup());
+		s.beginTick(10, 1);
+		EchoBudget again = s.forEcho("a", 2, 1);
+		assertSame(a, again, "the budget object is reused");
+		assertEquals(2, again.blockOpsLeft(), "refilled with this tick's caps");
+		assertEquals(1, again.lookupsLeft());
+		s.forget("a");
+		s.beginTick(10, 1);
+		assertEquals(2, s.forEcho("a", 2, 1).blockOpsLeft());
+	}
+
 	/** 10 greedy echoes, room for 2 per tick: rotation gives every echo exactly the same share. */
 	@Test
 	void roundRobinIsFair() {

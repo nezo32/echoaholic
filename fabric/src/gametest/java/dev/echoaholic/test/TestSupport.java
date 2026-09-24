@@ -14,7 +14,6 @@ import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.echoaholic.EchoServer;
 import dev.echoaholic.core.EchoConfig;
-import dev.echoaholic.core.stream.DecodedSegment;
 import dev.echoaholic.core.stream.SegmentMeta;
 import dev.echoaholic.core.stream.TickEntry;
 import dev.echoaholic.entity.EchoEntity;
@@ -214,8 +213,7 @@ public final class TestSupport {
 		for (EchoInfo i : manager(h).list(owner)) {
 			if (i.index() == k) return i;
 		}
-		h.fail("echo #" + k + " not listed; list=" + manager(h).list(owner));
-		throw new IllegalStateException();
+		throw h.assertionException(Component.literal("echo #" + k + " not listed; list=" + manager(h).list(owner)));
 	}
 
 	/** Asserts (inside succeedWhen / thenWaitUntil) that echo #k of owner has a live entity, and returns it. */
@@ -263,8 +261,11 @@ public final class TestSupport {
 	public static List<TickEntry> recordedEntries(GameTestHelper h, UUID owner) {
 		List<TickEntry> out = new ArrayList<>();
 		for (SegmentMeta m : es(h).store().ring(owner).segments()) {
-			DecodedSegment d = es(h).store().load(owner, m.seq()).join();
-			out.addAll(d.entries());
+			try {
+				out.addAll(es(h).store().load(owner, m.seq()).join().entries());
+			} catch (RuntimeException e) {
+				throw h.assertionException(Component.literal("segment " + m.seq() + " of " + owner + " unreadable: " + e));
+			}
 		}
 		return out;
 	}
@@ -278,7 +279,7 @@ public final class TestSupport {
 		try (Stream<Path> s = Files.list(dir)) {
 			return s.filter(p -> p.getFileName().toString().endsWith(".seg")).count();
 		} catch (IOException e) {
-			throw new IllegalStateException(e);
+			return -1;
 		}
 	}
 

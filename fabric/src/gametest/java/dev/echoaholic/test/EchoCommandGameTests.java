@@ -200,7 +200,7 @@ public class EchoCommandGameTests {
 				h.assertValueEqual(run(h, op(h, opOut), "echoaholic list " + nameOf(r.owner())), 1, "op lists another player");
 				h.assertTrue(opOut.has("echoaholic.command.list.entry"), "op sees the entry");
 			} catch (CommandSyntaxException ex) {
-				throw new AssertionError("list failed", ex);
+				h.fail("list command failed to parse: " + ex.getMessage());
 			} finally {
 				cleanup(h, r.owner());
 				cleanup(h, other);

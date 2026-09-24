@@ -191,6 +191,35 @@ class SegmentTest {
 		assertEquals(5.5, d.positionAt(35).orElseThrow().x(), 1e-9, "death does not stop interpolation");
 	}
 
+	/** The allocation-free overload agrees with {@link DecodedSegment#positionAt(long)} on every tick. */
+	@Test
+	void positionAtIntoArrayMatches() throws IOException {
+		SegmentWriter w = new SegmentWriter(0, 100);
+		w.append(5, new Move(0, 64, 0, 170, 10), List.of());
+		w.append(10, new Move(5, 64, 0, -170, 0), List.of(new Teleport(5, 64, 0)));
+		w.append(20, new Move(5, 64, 50, 0, -20), List.of());
+		w.append(30, new Move(5, 64, 52, 90, 0), List.of(new Dimension("minecraft:the_end", 5, 64, 52)));
+		w.append(40, new Move(6, 65, 52, 100, 5), List.of(Death.INSTANCE));
+		DecodedSegment d = SegmentReader.decode(w.seal());
+		double[] out = {-1, -1, -1, -1, -1};
+		for (long t = 0; t < 100; t++) {
+			var expected = d.positionAt(t);
+			boolean found = d.positionAt(t, out);
+			assertEquals(expected.isPresent(), found, "tick " + t);
+			if (!found) {
+				assertEquals(-1, out[0], "out untouched when there is no sample");
+				continue;
+			}
+			Move m = expected.orElseThrow();
+			assertEquals(m.x(), out[0], 1e-12, "x at " + t);
+			assertEquals(m.y(), out[1], 1e-12, "y at " + t);
+			assertEquals(m.z(), out[2], 1e-12, "z at " + t);
+			assertEquals(m.yRot(), (float) out[3], 1e-6, "yRot at " + t);
+			assertEquals(m.xRot(), (float) out[4], 1e-6, "xRot at " + t);
+		}
+		assertThrows(IllegalArgumentException.class, () -> d.positionAt(100, out));
+	}
+
 	@Test
 	void emptyAndPartialSegments() throws IOException {
 		SegmentWriter empty = new SegmentWriter(2400);

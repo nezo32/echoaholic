@@ -384,18 +384,18 @@ public class EchoReplayGameTests {
 			h.assertValueEqual(e.echoIndex(), 1, "echoIndex");
 			h.assertTrue(!e.shouldBeSaved(), "never saved to chunks");
 			h.assertValueEqual(e.getMaxHealth(), 20.0f, "max health");
-			h.assertTrue(hideDescription(e), "Mannequin description line hidden");
+			h.assertTrue(hideDescription(h, e), "Mannequin description line hidden");
 			cleanup(h, r.owner());
 		});
 	}
 
-	private static boolean hideDescription(Mannequin m) {
+	private static boolean hideDescription(GameTestHelper h, Mannequin m) {
 		try {
 			Field f = Mannequin.class.getDeclaredField("hideDescription");
 			f.setAccessible(true);
 			return f.getBoolean(m);
 		} catch (ReflectiveOperationException ex) {
-			throw new AssertionError("cannot read Mannequin.hideDescription", ex);
+			throw h.assertionException(Component.literal("cannot read Mannequin.hideDescription: " + ex));
 		}
 	}
 }

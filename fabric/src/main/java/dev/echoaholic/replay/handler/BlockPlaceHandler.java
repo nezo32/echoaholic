@@ -9,7 +9,9 @@ import dev.echoaholic.util.Ids;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -20,14 +22,18 @@ import net.minecraft.world.level.block.state.properties.BedPart;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.gameevent.GameEvent;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
  * Places the recorded block state if the target is replaceable, nothing else is in the way, the block can survive
- * there and the echo owns the material (one virtual-inventory credit, spent on success). TNT is free while the
- * {@code freeTnt} setting is on and always takes a hazard op (it primes at once next to redstone power).
+ * there and the echo owns the material (one virtual-inventory credit, spent on success). TNT always takes a hazard op.
+ *
+ * <p>TNT paid with a credit is placed as a normal TNT block. Without a credit, while the {@code freeTnt} setting is on,
+ * the TNT is primed at once instead (a {@link PrimedTnt} lit by the echo, default fuse): free TNT never exists as a
+ * block, so nobody can mine it into real TNT items. With the {@code tntExplodes} game rule off free TNT is skipped.
  *
  * <p>The state is re-fitted to the current world (fence/wall/stair connections) and waterlogging follows the fluid
  * actually at the position, so a recorded waterlogged block never creates water from nothing. Doors, beds and tall
@@ -54,14 +60,25 @@ final class BlockPlaceHandler implements ReplayHandler<BlockPlace> {
 
 		Item item = a.item().isEmpty() ? state.getBlock().asItem() : WorldHandlers.itemOrAir(a.item());
 		String itemId = Ids.item(item);
-		boolean tnt = Hazards.isTnt(a);
-		boolean free = tnt && ctx.config().freeTnt();
-		if (!free && (item == Items.AIR || !ctx.inventory().has(itemId))) return Result.SKIPPED;
+		boolean paid = item != Items.AIR && ctx.inventory().has(itemId);
+		boolean free = !paid && Hazards.isTnt(a) && ctx.config().freeTnt();
+		if (!paid && !free) return Result.SKIPPED;
+		if (free && !level.getGameRules().get(GameRules.TNT_EXPLODES)) return Result.SKIPPED;
 
 		if (!Hazards.take(ctx.budget(), Hazards.of(a))) return Result.WAIT;
 
+		if (free) {
+			// never a minable block: prime it right away, like TntBlock.prime with the echo as igniter
+			PrimedTnt primed = new PrimedTnt(level, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, echo);
+			level.addFreshEntity(primed);
+			level.playSound(null, primed.getX(), primed.getY(), primed.getZ(), SoundEvents.TNT_PRIMED, SoundSource.BLOCKS, 1.0F,
+					1.0F);
+			level.gameEvent(echo, GameEvent.PRIME_FUSE, pos);
+			WorldHandlers.finish(ctx, new ItemStack(Items.TNT), Activity.BUILDING);
+			return Result.DONE;
+		}
 		if (!level.setBlock(pos, state, Block.UPDATE_ALL)) return Result.SKIPPED;
-		if (!free) ctx.inventory().take(itemId);
+		ctx.inventory().take(itemId);
 		ItemStack stack = new ItemStack(item);
 		// places the other half of doors/beds/tall plants and applies block-entity data like vanilla
 		state.getBlock().setPlacedBy(level, pos, state, echo, stack);
