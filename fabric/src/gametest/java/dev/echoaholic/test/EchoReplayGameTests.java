@@ -252,7 +252,7 @@ public class EchoReplayGameTests {
 	 * Lag stays exactly k * delay on a free walk across many segment boundaries (20-tick test segments): loading the
 	 * next segment must never stall the echo.
 	 */
-	@GameTest(structure = ARENA, maxTicks = 1000)
+	@GameTest(environment = "echoaholic-gametest:solo_lag", structure = ARENA, maxTicks = 1000)
 	public void segmentSwitchKeepsLag(GameTestHelper h) {
 		echoWorld(h);
 		floor(h);

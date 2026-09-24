@@ -363,7 +363,9 @@ public class EchoCommandGameTests {
 		long[] cursorAtFirst = {-1};
 		List<Object> vanillaSeen = new ArrayList<>();
 		h.onEachTick(() -> {
+			var ours = manager(h).entity(u, 1);
 			for (EchoTrailPayload t : payloads(back.drain(), EchoTrailPayload.class)) {
+				if (ours == null || t.entityId() != ours.getId()) continue; // echoes of neighbouring tests are near too
 				if (trails.isEmpty()) cursorAtFirst[0] = echo.cursor;
 				trails.add(t);
 			}

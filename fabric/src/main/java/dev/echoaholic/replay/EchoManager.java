@@ -382,6 +382,22 @@ public final class EchoManager implements EchoListener {
 	}
 
 	/**
+	 * Starts loading the segment after {@code seg} once the cursor is within {@link MovementRules#PREFETCH_TICKS} of its
+	 * end (once per segment). The future is kept as the runtime's pending load, so {@link #segment} promotes it.
+	 */
+	private void prefetch(EchoRuntime rt, DecodedSegment seg) {
+		long end = seg.endTick();
+		if (end - rt.state.cursor > MovementRules.PREFETCH_TICKS || rt.prefetchedEnd == end) return;
+		SegmentMeta next = store.ring(rt.owner).segmentAtOrAfter(end).orElse(null);
+		if (next == null) return; // not sealed yet: try again next tick
+		rt.prefetchedEnd = end;
+		if (store.cached(rt.owner, next.seq()) != null) return;
+		if (rt.pending != null && rt.pendingSeq == next.seq()) return;
+		rt.pending = store.load(rt.owner, next.seq());
+		rt.pendingSeq = next.seq();
+	}
+
+	/**
 	 * Runs the meta actions (Teleport, Dimension, Death, Pose, Swing) at the front of {@code entry}, from actionsDone.
 	 * Returns ADVANCED to continue the tick, GONE when the echo was removed, STALLED on a budget WAIT.
 	 */
