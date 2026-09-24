@@ -58,7 +58,6 @@ public class EchoEntity extends Mannequin {
 
 	private @Nullable Vec3 steerTarget;
 	private boolean steerFreeFlight;
-	private boolean steerFallFlying;
 	private boolean steerBlocked;
 	private boolean flying;
 	private boolean cheap;
@@ -144,7 +143,7 @@ public class EchoEntity extends Mannequin {
 		boolean fly = steerFreeFlight || isInWater() || isInLava() || onClimbable();
 		setFlying(fly);
 		// elytra flight dives and climbs as fast as it moves horizontally; swimming/climbing stays gentle
-		double maxDy = steerFallFlying ? MAX_STEP : MAX_FLY_STEP_Y;
+		double maxDy = steerFreeFlight && lastPose.fallFlying() ? MAX_STEP : MAX_FLY_STEP_Y;
 		double vy = fly ? Mth.clamp(dy, -maxDy, maxDy) : getDeltaMovement().y;
 		setDeltaMovement(dx, vy, dz);
 		if (!fly && dy > 0.5 && onGround() && (horizontalCollision || dy > 0.6)) {

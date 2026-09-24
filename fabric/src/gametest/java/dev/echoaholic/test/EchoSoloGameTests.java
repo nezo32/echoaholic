@@ -44,6 +44,7 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.block.PressurePlateBlock;
 import net.minecraft.world.phys.Vec3;
 
@@ -471,5 +472,37 @@ public class EchoSoloGameTests {
 				restore(h, before);
 			}
 		}).thenSucceed();
+	}
+
+	// ---------------------------------------------------------------------------------------------- block_drops
+
+	/** With the block_drops game rule off an echo's break drops nothing and earns no credit. */
+	@GameTest(environment = NS + "solo_drops", maxTicks = 200)
+	public void noCreditsWithoutBlockDrops(GameTestHelper h) {
+		TestSupport.echoWorld(h);
+		floor(h);
+		MinecraftServer server = h.getLevel().getServer();
+		boolean drops = h.getLevel().getGameRules().get(GameRules.BLOCK_DROPS);
+		BlockPos rel = new BlockPos(4, 1, 4);
+		h.setBlock(rel, Blocks.STONE);
+		BlockPos abs = h.absolutePos(rel);
+		Stream s = new Stream(Level.OVERWORLD, at(h, 2, 2)).idle(5);
+		long t = s.now();
+		s.tick(SyntheticStreams.breakOf(abs, "minecraft:stone", "minecraft:iron_pickaxe")).idle(200);
+		h.getLevel().getGameRules().set(GameRules.BLOCK_DROPS, false, server);
+		Replay r = SyntheticStreams.replay(h, s);
+		h.startSequence()
+				.thenWaitUntil(() -> h.assertTrue(r.cursor() > t + 2, "echo past the break"))
+				.thenExecute(() -> {
+					try {
+						h.assertTrue(h.getLevel().getBlockState(abs).isAir(), "block broken");
+						h.assertItemEntityNotPresent(net.minecraft.world.item.Items.COBBLESTONE, rel, 3.0);
+						h.assertTrue(r.echo().inventory.isEmpty(), "no credit without drops: " + r.echo().inventory);
+					} finally {
+						h.getLevel().getGameRules().set(GameRules.BLOCK_DROPS, drops, server);
+						cleanup(h, r.owner());
+					}
+				})
+				.thenSucceed();
 	}
 }

@@ -119,6 +119,32 @@ public class EchoLifecycleGameTests {
 				.thenSucceed();
 	}
 
+	/** A killed echo stops where it died (no more steering during the death animation). */
+	@GameTest(maxTicks = 200)
+	public void dyingEchoStaysPut(GameTestHelper h) {
+		echoWorld(h);
+		floor(h);
+		Stream s = new Stream(Level.OVERWORLD, at(h, 1, 1)).idle(5).walkTo(at(h, 6, 1), 0.1).walkTo(at(h, 6, 6), 0.1).idle(200);
+		Replay r = SyntheticStreams.replay(h, s);
+		EchoEntity[] e = {null};
+		Vec3[] where = {null};
+		h.startSequence()
+				.thenWaitUntil(() -> h.assertTrue(r.cursor() > 15, "echo walking"))
+				.thenExecute(() -> {
+					e[0] = awaitEcho(h, r.owner(), 1);
+					e[0].kill(h.getLevel());
+					where[0] = e[0].position();
+				})
+				.thenIdle(10)
+				.thenExecute(() -> {
+					h.assertTrue(e[0].isDeadOrDying() || e[0].isRemoved(), "echo dead");
+					h.assertTrue(TestSupport.horizontal(e[0].position(), where[0]) < 0.05,
+							"dying echo moved from " + h.relativeVec(where[0]) + " to " + h.relativeVec(e[0].position()));
+					cleanup(h, r.owner());
+				})
+				.thenSucceed();
+	}
+
 	/** The owner's recorded death: the echo lies down (SLEEPING) for 60 ticks with its cursor held, then stands up. */
 	@GameTest(maxTicks = 300)
 	public void collapseOnOwnerDeath(GameTestHelper h) {
