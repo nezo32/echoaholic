@@ -37,7 +37,7 @@ import net.minecraft.server.players.NameAndId;
  * <ul>
  * <li>{@code on | off | status} (no argument = status)</li>
  * <li>{@code delay <1..120>} minutes, {@code max <1..64>} echoes per player</li>
- * <li>{@code list [player]}: own echoes for anyone, other players' echoes for operators</li>
+ * <li>{@code list [player]}: own echoes for anyone ({@code list}), any player's echoes for operators</li>
  * <li>{@code clear [player]}: removes the echoes and wipes the recording</li>
  * <li>{@code pause | resume}: freezes replay and spawns (recording continues)</li>
  * <li>{@code config [key [value]]}: every setting of {@link EchoConfig.Key}; out-of-range values are clamped</li>
@@ -64,7 +64,9 @@ public final class EchoCommand {
 						.executes(c -> max(c.getSource(), IntegerArgumentType.getInteger(c, "echoes")))))
 				.then(Commands.literal("list")
 						.executes(c -> listSelf(c.getSource()))
+						// op only: GameProfileArgument may do a blocking profile lookup, so non-ops never reach it
 						.then(Commands.argument("player", GameProfileArgument.gameProfile())
+								.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 								.executes(c -> list(c.getSource(), GameProfileArgument.getGameProfiles(c, "player")))))
 				.then(op("clear")
 						.executes(c -> clearSelf(c.getSource()))
@@ -189,14 +191,8 @@ public final class EchoCommand {
 	}
 
 	private static int list(CommandSourceStack source, Collection<NameAndId> targets) {
-		ServerPlayer self = source.getPlayer();
-		boolean op = isOp(source);
 		int total = 0;
 		for (NameAndId target : targets) {
-			if (!op && (self == null || !self.getUUID().equals(target.id()))) {
-				source.sendFailure(tr("echoaholic.command.list.denied", "You can only list your own echoes"));
-				continue;
-			}
 			total += listOne(source, target.id(), target.name());
 		}
 		return total;

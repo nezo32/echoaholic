@@ -20,7 +20,6 @@
   "echoaholic.command.list.header": "Эхо игрока %1$s (%2$s/%3$s):",
   "echoaholic.command.list.entry": "#%1$s · %2$s · отстаёт на %3$s · %4$s · ❤ %5$s",
   "echoaholic.command.list.empty": "У игрока %s пока нет эха",
-  "echoaholic.command.list.denied": "Смотреть можно только своё эхо",
   "echoaholic.command.config.value": "%1$s = %2$s",
   "echoaholic.command.config.set": "%1$s для этого мира теперь: %2$s",
   "echoaholic.command.config.unknown": "Неизвестная настройка: %s",

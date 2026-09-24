@@ -116,7 +116,6 @@ class LangFileTest {
 			"echoaholic.command.list.header",
 			"echoaholic.command.list.entry",
 			"echoaholic.command.list.empty",
-			"echoaholic.command.list.denied",
 			"echoaholic.command.config.value",
 			"echoaholic.command.config.set",
 			"echoaholic.command.config.unknown",

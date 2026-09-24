@@ -1,5 +1,10 @@
 package dev.echoaholic.mode;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+
 import dev.echoaholic.Echoaholic;
 import dev.echoaholic.EchoServer;
 import dev.echoaholic.core.EchoConfig;
@@ -7,6 +12,7 @@ import dev.echoaholic.mixin.MinecraftServerAccessor;
 import dev.echoaholic.replay.ReplayHandlers;
 import dev.echoaholic.storage.EchoWorldData;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.storage.LevelResource;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -44,7 +50,23 @@ public final class EchoBootstrap {
 			Echoaholic.LOGGER.debug("Echoaholic Mode loaded: {}", data.config().enabled());
 			return;
 		}
-		// 3. no data yet: OFF, written once so this runs once per world
+		Path file = server.getWorldPath(LevelResource.DATA).resolve("echoaholic").resolve("world.dat");
+		if (Files.exists(file)) {
+			// 3a. the file is there but vanilla could not read it (it logged the error and cached "absent"). Do NOT
+			//     persist DEFAULT over it: keep the in-memory defaults (mode OFF) without setDirty/scheduleSave, so the
+			//     damaged file stays for inspection or repair. A later save that marks the data dirty (a command, the
+			//     save hook) would replace it, so a backup copy is kept next to it as well.
+			Path backup = file.resolveSibling("world.dat.damaged-" + System.currentTimeMillis());
+			try {
+				Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+			} catch (IOException | RuntimeException e) {
+				backup = null;
+			}
+			Echoaholic.LOGGER.error("Unreadable Echoaholic world data {}; Echoaholic Mode stays OFF for this session and the file is not"
+					+ " overwritten now{}", file, backup != null ? " (backup: " + backup.getFileName() + ")" : "");
+			return;
+		}
+		// 3b. no data yet: OFF, written once so this runs once per world
 		set(server, data, EchoConfig.DEFAULT);
 		server.getDataStorage().scheduleSave();
 	}

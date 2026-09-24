@@ -319,7 +319,10 @@ public class EchoWorldActionGameTests {
 							new BlockHitResult(Vec3.atCenterOf(rack).add(0, 0.5, 0), Direction.UP, rack, false));
 				})
 				.thenIdle(1)
-				.thenExecute(() -> p.kill(h.getLevel()))
+				.thenExecute(() -> {
+					p.kill(h.getLevel());
+					h.assertTrue(p.isDeadOrDying(), "owner died (health " + p.getHealth() + ")");
+				})
 				.thenIdle(2)
 				.thenExecute(() -> {
 					h.getLevel().getServer().getPlayerList().remove(p);
@@ -332,7 +335,8 @@ public class EchoWorldActionGameTests {
 					List<UseItem> uses = actions(h, u, UseItem.class);
 					h.assertTrue(uses.stream().anyMatch(a -> a.kind() == UseItem.Kind.IGNITE && a.item().equals("minecraft:flint_and_steel")),
 							"ignite recorded: " + uses);
-					h.assertTrue(!actions(h, u, Death.class).isEmpty(), "owner death recorded");
+					h.assertTrue(!actions(h, u, Death.class).isEmpty(), "owner death recorded; stream=" + recordedEntries(h, u).stream()
+							.filter(e -> !e.actions().isEmpty()).map(e -> e.tick() + ":" + e.actions()).toList());
 					h.setBlock(new BlockPos(6, 1, 2), Blocks.AIR);
 					pig.discard();
 					discardAll(h, ItemEntity.class, around(h, 4));

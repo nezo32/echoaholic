@@ -14,10 +14,12 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseFireBlock;
+import net.minecraft.world.level.block.BonemealableBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.GrowingPlantHeadBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.BlockHitResult;
 import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
@@ -90,8 +92,14 @@ public abstract class ServerPlayerGameModeMixin {
 				use = at(UseItem.Kind.SHEAR_BLOCK, pos, face, itemId, Ids.block(before.getBlock()));
 			}
 		} else if (item == Items.BONE_MEAL) {
-			// growCrop / growWaterPlant consume one only when they applied
-			if (itemStack.isEmpty() || itemStack.getCount() < echoaholic$count) {
+			// growCrop / growWaterPlant consume one only when they applied; other blocks (decorated pot...) can take
+			// one item too, so the target must be bone-mealable or the water-plant case. A bonemealable target counts
+			// even unchanged (random growth may fail), the water case only when a state changed.
+			boolean shrank = itemStack.isEmpty() || itemStack.getCount() < echoaholic$count;
+			boolean bonemealable = before.getBlock() instanceof BonemealableBlock;
+			boolean water = isWater(before) || isWater(beforeRel);
+			boolean changed = after != before || level.getBlockState(rel) != beforeRel;
+			if (shrank && (bonemealable || (water && changed))) {
 				use = at(UseItem.Kind.BONE_MEAL, pos, face, itemId, "");
 			}
 		}
@@ -101,6 +109,11 @@ public abstract class ServerPlayerGameModeMixin {
 	@Unique
 	private static @Nullable Boolean lit(BlockState state) {
 		return state.hasProperty(BlockStateProperties.LIT) ? state.getValue(BlockStateProperties.LIT) : null;
+	}
+
+	@Unique
+	private static boolean isWater(BlockState state) {
+		return state.getFluidState().getType().isSame(Fluids.WATER);
 	}
 
 	@Unique

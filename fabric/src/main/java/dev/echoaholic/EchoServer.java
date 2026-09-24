@@ -108,6 +108,7 @@ public final class EchoServer {
 			stream.echoes.clear();
 		}
 		data.setDirty();
+		server.getDataStorage().scheduleSave(); // a crash before the next autosave must not resurrect the cleared echoes
 		return removed;
 	}
 

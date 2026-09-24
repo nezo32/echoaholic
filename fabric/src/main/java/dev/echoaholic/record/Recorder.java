@@ -23,6 +23,7 @@ import dev.echoaholic.storage.OwnerProfile;
 import dev.echoaholic.storage.PlayerStream;
 import dev.echoaholic.storage.StreamStore;
 import dev.echoaholic.util.Ids;
+import net.fabricmc.fabric.api.entity.FakePlayer;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -155,7 +156,12 @@ public final class Recorder {
 
 	/** Mode on, the player is tracked and in survival or adventure. */
 	public boolean isRecording(ServerPlayer p) {
-		return data.config().enabled() && streamingMode(p) && recordings.containsKey(p.getUUID());
+		return data.config().enabled() && streamingMode(p) && recordings.containsKey(p.getUUID()) && isRealPlayer(p);
+	}
+
+	/** The online instance of that UUID; mod fake players (which may carry a real player's UUID) never are. */
+	private boolean isRealPlayer(ServerPlayer p) {
+		return !(p instanceof FakePlayer) && server.getPlayerList().getPlayer(p.getUUID()) == p;
 	}
 
 	/** Online, and T advanced in this server tick. */

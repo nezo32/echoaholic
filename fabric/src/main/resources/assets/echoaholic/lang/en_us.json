@@ -20,7 +20,6 @@
   "echoaholic.command.list.header": "Echoes of %1$s (%2$s/%3$s):",
   "echoaholic.command.list.entry": "#%1$s · %2$s · %3$s behind · %4$s · ❤ %5$s",
   "echoaholic.command.list.empty": "%s has no echoes yet",
-  "echoaholic.command.list.denied": "You can only list your own echoes",
   "echoaholic.command.config.value": "%1$s = %2$s",
   "echoaholic.command.config.set": "%1$s is now %2$s for this world",
   "echoaholic.command.config.unknown": "Unknown setting: %s",
