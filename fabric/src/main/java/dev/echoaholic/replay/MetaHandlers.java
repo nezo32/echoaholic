@@ -13,7 +13,7 @@ public final class MetaHandlers {
 	public static void register() {
 		ReplayHandlers.register(ActionTypes.POSE, (ctx, pose) -> {
 			ctx.runtime().pose = pose;
-			if (!ctx.cheap()) ctx.echo().applyPose(pose);
+			ctx.echo().applyPose(pose); // remembered by the entity; not shown while cheap or collapsed
 			return ReplayHandler.Result.DONE;
 		});
 		ReplayHandlers.register(ActionTypes.TELEPORT, (ctx, tp) -> {

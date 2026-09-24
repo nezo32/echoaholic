@@ -28,6 +28,8 @@ public final class EchoRuntime {
 	@Nullable DecodedSegment segment;
 	/** Index into {@code segment.entries()} of the first entry with tick &gt;= cursor. */
 	int entryIndex;
+	/** Cursor value {@link #entryIndex} was computed for (-1 = recompute). */
+	long entryCursor = -1;
 	/** Pending load of {@link #pendingSeq}. */
 	@Nullable CompletableFuture<DecodedSegment> pending;
 	long pendingSeq = -1;
@@ -39,6 +41,8 @@ public final class EchoRuntime {
 	/** Spawn burst on the first entity spawn only (new echoes, not restarts / reloads / dimension changes). */
 	boolean burstPending;
 	boolean removed;
+	/** The cursor jumped (gap, failed load): a far target is reached by teleport instead of walking. */
+	boolean resync;
 
 	Pose pose = Pose.STANDING;
 	Activity activity = Activity.IDLE;
