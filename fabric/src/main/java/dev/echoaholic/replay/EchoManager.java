@@ -9,8 +9,10 @@ import dev.echoaholic.core.VirtualInventory;
 import dev.echoaholic.core.action.Action;
 import dev.echoaholic.core.action.ActionTypes;
 import dev.echoaholic.core.action.ActionType;
+import dev.echoaholic.core.action.Death;
 import dev.echoaholic.core.action.Dimension;
 import dev.echoaholic.core.action.Move;
+import dev.echoaholic.core.action.Teleport;
 import dev.echoaholic.core.stream.DecodedSegment;
 import dev.echoaholic.core.stream.RingBuffer;
 import dev.echoaholic.core.stream.SegmentMeta;
@@ -253,8 +255,11 @@ public final class EchoManager implements EchoListener {
 		}
 
 		long c = st.cursor;
+		TickEntry entry = entryAt(rt, seg, c);
 		Move target = seg.positionAt(c).orElse(null);
-		if (target != null) {
+		// A tick with a pending Teleport / Dimension / Death: its move sample is already the destination (or the death
+		// spot), so walking there first would never succeed. Run the tick's actions right away; they relocate the echo.
+		if (target != null && !hasPendingJump(entry, st.actionsDone)) {
 			if (rt.cheap) {
 				e.snapTo(target.x(), target.y(), target.z(), target.yRot(), target.xRot());
 			} else {
@@ -281,7 +286,6 @@ public final class EchoManager implements EchoListener {
 		rt.resync = false;
 
 		// Actions of tick c, resuming after the ones already done (budget stall mid-tick).
-		TickEntry entry = entryAt(rt, seg, c);
 		if (entry != null) {
 			List<Action> actions = entry.actions();
 			int count = actions.size();
@@ -327,6 +331,17 @@ public final class EchoManager implements EchoListener {
 			sendTrail(rt, e, (ServerLevel) e.level(), seg);
 		}
 		return ADVANCED;
+	}
+
+	/** True iff {@code entry} still has a Teleport, Dimension or Death action at or after {@code from}. */
+	private static boolean hasPendingJump(@Nullable TickEntry entry, int from) {
+		if (entry == null) return false;
+		List<Action> actions = entry.actions();
+		for (int i = from, n = actions.size(); i < n; i++) {
+			Action a = actions.get(i);
+			if (a instanceof Dimension || a instanceof Teleport || a instanceof Death) return true;
+		}
+		return false;
 	}
 
 	private void steer(EchoRuntime rt, EchoEntity e, Move target) {
