@@ -24,8 +24,8 @@ import java.util.function.ToIntFunction;
  *        1..4096.
  * @param globalHazardOpsPerTick explosions, fire and fluid placements of all echoes together per tick. Default 2, range
  *        1..64.
- * @param cheapModeDistance echoes farther than this many blocks from every player only move and change blocks (no
- *        swings, poses, sounds, trail). Default 128, range 16..1024.
+ * @param cheapModeDistance echoes farther than this many blocks from every player only move and act (block
+ *        actions and attack damage still happen; no swings, poses, sounds, trail). Default 128, range 16..1024.
  * @param triggerBlocks whether echoes press pressure plates and trip tripwires. Default false.
  * @param freeTnt whether echoes place recorded TNT without owning it. Default true.
  * @param paused replay frozen for everybody (recording continues). Default false.
