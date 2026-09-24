@@ -13,7 +13,8 @@ public final class MetaHandlers {
 	public static void register() {
 		ReplayHandlers.register(ActionTypes.POSE, (ctx, pose) -> {
 			ctx.runtime().pose = pose;
-			ctx.echo().applyPose(pose); // remembered by the entity; not shown while cheap or collapsed
+			// remembered by the entity; not shown while cheap or collapsed (no entity yet: applied at spawn)
+			if (ctx.echo() != null) ctx.echo().applyPose(pose);
 			return ReplayHandler.Result.DONE;
 		});
 		ReplayHandlers.register(ActionTypes.TELEPORT, (ctx, tp) -> {
@@ -31,7 +32,7 @@ public final class MetaHandlers {
 			return ReplayHandler.Result.DONE;
 		});
 		ReplayHandlers.register(ActionTypes.SWING, (ctx, swing) -> {
-			if (!ctx.cheap()) ctx.echo().swingArm();
+			if (!ctx.cheap() && ctx.echo() != null) ctx.echo().swingArm();
 			return ReplayHandler.Result.DONE;
 		});
 	}

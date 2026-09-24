@@ -30,6 +30,8 @@ public final class EchoRuntime {
 	int entryIndex;
 	/** Cursor value {@link #entryIndex} was computed for (-1 = recompute). */
 	long entryCursor = -1;
+	/** Segment {@link #entryIndex} belongs to. */
+	@Nullable DecodedSegment entrySegment;
 	/** Pending load of {@link #pendingSeq}. */
 	@Nullable CompletableFuture<DecodedSegment> pending;
 	long pendingSeq = -1;
@@ -43,6 +45,12 @@ public final class EchoRuntime {
 	/** Spawn burst on the first entity spawn only (new echoes, not restarts / reloads / dimension changes). */
 	boolean burstPending;
 	boolean removed;
+	/** EchoManager tick sequence this runtime was created in (not ticked in that tick). */
+	long bornSeq;
+	/** Last steer target sent to the entity (to skip identical steer calls). */
+	boolean steering;
+	double steerX, steerY, steerZ;
+	boolean steerFree;
 	/** The cursor jumped (gap, failed load): a far target is reached by teleport instead of walking. */
 	boolean resync;
 

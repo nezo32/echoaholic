@@ -71,8 +71,15 @@ public final class EchoManager implements EchoListener {
 	private final BlockPos.MutableBlockPos scratchPos = new BlockPos.MutableBlockPos();
 	private final float[] trailScratch = new float[MovementRules.TRAIL_POINTS * 3];
 
+	private final List<EchoRuntime> orderScratch = new ArrayList<>();
+	private final double[] targetScratch = new double[5];
+	private final double[] nextScratch = new double[5];
+	private final double[] trailPoint = new double[5];
+
 	private EchoConfig cfg = EchoConfig.DEFAULT;
 	private long now;
+	/** Counts tickOnce calls; a runtime created during one is not ticked in it (lag is exactly k * delay). */
+	private long tickSeq;
 	private TickStats lastStats = TickStats.EMPTY;
 
 	public EchoManager(MinecraftServer server, EchoWorldData data, StreamStore store, Recorder recorder) {
@@ -94,6 +101,7 @@ public final class EchoManager implements EchoListener {
 	/** The tick body; returns what it did. */
 	public TickStats tickOnce() {
 		long start = System.nanoTime();
+		tickSeq++;
 		cfg = data.config();
 		now = server.getTickCount();
 		if (!cfg.enabled()) {
@@ -104,10 +112,10 @@ public final class EchoManager implements EchoListener {
 		if (!cfg.paused()) schedule();
 
 		int echoes = 0, advanced = 0, stalled = 0, frozen = 0;
-		List<EchoRuntime> order = budget.order(runtimeList);
+		List<EchoRuntime> order = budget.order(runtimeList, orderScratch);
 		for (int i = 0, n = order.size(); i < n; i++) {
 			EchoRuntime rt = order.get(i);
-			if (rt.removed) continue;
+			if (rt.removed || rt.bornSeq == tickSeq) continue;
 			echoes++;
 			int r;
 			try {
@@ -123,6 +131,7 @@ public final class EchoManager implements EchoListener {
 				default -> { }
 			}
 		}
+		orderScratch.clear();
 		lastStats = new TickStats(echoes, advanced, stalled, frozen, budget.blockOpsUsed(), budget.hazardOpsUsed(),
 				budget.lookupsUsed(), budget.deferred(), System.nanoTime() - start);
 		return lastStats;
@@ -535,7 +544,9 @@ public final class EchoManager implements EchoListener {
 	private static @Nullable TickEntry entryAt(EchoRuntime rt, DecodedSegment seg, long c) {
 		List<TickEntry> entries = seg.entries();
 		int i;
-		if (rt.entryCursor == c - 1 && rt.entryCursor >= 0) {
+		if (rt.entrySegment == seg && rt.entryCursor == c) {
+			i = rt.entryIndex;
+		} else if (rt.entrySegment == seg && rt.entryCursor == c - 1 && rt.entryCursor >= 0) {
 			i = rt.entryIndex;
 			if (i < entries.size() && entries.get(i).tick() < c) i++;
 		} else {
@@ -549,6 +560,7 @@ public final class EchoManager implements EchoListener {
 		}
 		rt.entryIndex = i;
 		rt.entryCursor = c;
+		rt.entrySegment = seg;
 		return i < entries.size() && entries.get(i).tick() == c ? entries.get(i) : null;
 	}
 
@@ -628,6 +640,7 @@ public final class EchoManager implements EchoListener {
 		if (!level.addFreshEntity(e)) return null;
 		rt.entity = e;
 		rt.level = level;
+		rt.steering = false;
 		if (!rt.cheap && !rt.pose.equals(dev.echoaholic.core.action.Pose.STANDING)) e.applyPose(rt.pose);
 		if (st.collapseTicks > 0) e.startCollapse(st.collapseTicks);
 		if (rt.burstPending) {
@@ -673,6 +686,7 @@ public final class EchoManager implements EchoListener {
 			return;
 		}
 		e.teleportTo(x, y, z);
+		stopSteer(rt, e); // otherwise the entity walks back toward its pre-jump target for a tick
 	}
 
 	/** Dimension action: same level = teleport when far (the per-segment keyframe case); other level = discard + respawn. */
@@ -682,7 +696,9 @@ public final class EchoManager implements EchoListener {
 		EchoEntity e = rt.entity;
 		ServerLevel current = level(rt);
 		if (target == current) {
-			double distSq = e != null ? e.distanceToSqr(x, y, z) : 0.0;
+			EchoState s0 = rt.state;
+			double distSq = e != null ? e.distanceToSqr(x, y, z)
+					: (x - s0.x) * (x - s0.x) + (y - s0.y) * (y - s0.y) + (z - s0.z) * (z - s0.z);
 			if (MovementRules.isJump(distSq)) teleport(rt, x, y, z);
 			return;
 		}
@@ -707,7 +723,7 @@ public final class EchoManager implements EchoListener {
 		rt.state.collapseTicks = ticks;
 		EchoEntity e = rt.entity;
 		if (e != null) {
-			e.steer(null, e.getYRot(), e.getXRot(), false);
+			stopSteer(rt, e);
 			e.startCollapse(ticks);
 		}
 	}
@@ -761,17 +777,17 @@ public final class EchoManager implements EchoListener {
 				if (next == null) break;
 				s = next;
 			}
-			Move m = s.positionAt(t).orElse(null);
-			if (m == null) break;
-			double dx = m.x() - px, dy = m.y() - py, dz = m.z() - pz;
+			double[] m = trailPoint;
+			if (!s.positionAt(t, m)) break;
+			double dx = m[0] - px, dy = m[1] - py, dz = m[2] - pz;
 			if (dx * dx + dy * dy + dz * dz > jumpSq) break;
-			buf[n * 3] = (float) m.x();
-			buf[n * 3 + 1] = (float) m.y();
-			buf[n * 3 + 2] = (float) m.z();
+			buf[n * 3] = (float) m[0];
+			buf[n * 3 + 1] = (float) m[1];
+			buf[n * 3 + 2] = (float) m[2];
 			n++;
-			px = m.x();
-			py = m.y();
-			pz = m.z();
+			px = m[0];
+			py = m[1];
+			pz = m[2];
 		}
 		return n == 0 ? null : new EchoTrailPayload(e.getId(), Arrays.copyOf(buf, n * 3));
 	}
@@ -781,6 +797,7 @@ public final class EchoManager implements EchoListener {
 	private EchoRuntime addRuntime(UUID owner, PlayerStream stream, EchoState state, boolean burst) {
 		EchoRuntime rt = new EchoRuntime(owner, stream, state);
 		rt.burstPending = burst;
+		rt.bornSeq = tickSeq;
 		runtimes.put(state.echoId, rt);
 		runtimeList.add(rt);
 		return rt;
@@ -790,6 +807,7 @@ public final class EchoManager implements EchoListener {
 	private void retire(PlayerStream stream, EchoState state, @Nullable ServerPlayer fadedTo) {
 		stream.echoes.remove(state);
 		EchoRuntime rt = runtimes.remove(state.echoId);
+		budget.forget(state.echoId);
 		if (rt != null) {
 			rt.removed = true;
 			runtimeList.remove(rt);
@@ -833,7 +851,9 @@ public final class EchoManager implements EchoListener {
 		EchoRuntime rt = runtimes.get(e.echoId());
 		if (rt == null || rt.entity != e) return;
 		if (e.level() instanceof ServerLevel level) EchoVisuals.retirePuff(level, e.position());
+		stopSteer(rt, e); // the corpse must not keep walking during the death animation
 		rt.entity = null; // vanilla finishes the death animation and removes it
+		budget.forget(rt.state.echoId);
 		rt.stream.echoes.remove(rt.state);
 		runtimes.remove(rt.state.echoId);
 		runtimeList.remove(rt);
@@ -896,6 +916,7 @@ public final class EchoManager implements EchoListener {
 		int count = stream.echoes.size();
 		for (EchoState s : new ArrayList<>(stream.echoes)) {
 			EchoRuntime rt = runtimes.remove(s.echoId);
+			budget.forget(s.echoId);
 			if (rt == null) continue;
 			rt.removed = true;
 			runtimeList.remove(rt);
@@ -930,7 +951,7 @@ public final class EchoManager implements EchoListener {
 			EchoRuntime rt = runtimeList.get(i);
 			EchoEntity e = rt.entity;
 			if (rt.owner.equals(owner) && e != null) {
-				e.steer(null, e.getYRot(), e.getXRot(), false);
+				stopSteer(rt, e);
 				rt.activity = Activity.PAUSED;
 			}
 		}

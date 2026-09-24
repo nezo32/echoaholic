@@ -42,7 +42,10 @@ public final class ReplayContext {
 		return rt.level;
 	}
 
-	/** The echo entity; never null while a handler runs. */
+	/**
+	 * The echo entity. Never null for world handlers; meta handlers (Pose, Teleport, Dimension, Death, Swing) may see
+	 * null when they run in the jump pre-pass before the entity exists.
+	 */
 	public EchoEntity echo() {
 		return rt.entity;
 	}

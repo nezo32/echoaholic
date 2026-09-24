@@ -338,7 +338,9 @@ public class EchoSoloGameTests {
 		long[] tBreak2 = {-1};
 		BlockPos b1 = base.offset(2, 0, 0), b2 = base.offset(2, 1, 0);
 		h.startSequence()
-				.thenWaitUntil(() -> h.assertTrue(level.isPositionEntityTicking(base), "far chunk ticking"))
+				.thenWaitUntil(() -> h.assertTrue(level.isPositionEntityTicking(base), "far chunk ticking (forced "
+						+ level.getForceLoadedChunks().contains(net.minecraft.world.level.ChunkPos.pack(cx, cz)) + ", loaded "
+						+ level.hasChunk(cx, cz) + ", base " + base + ")"))
 				.thenExecute(() -> {
 					for (int dx = -3; dx <= 3; dx++) {
 						for (int dz = -3; dz <= 3; dz++) {
