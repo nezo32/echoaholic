@@ -13,11 +13,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.gamerules.GameRules;
 
 /**
  * Breaks the recorded block again, but only if the block at the position is still the recorded block. Drops are
  * computed as if mined with a plain copy of the recorded tool (no enchantments: no fortune, no silk touch), fall on
- * the ground, and every dropped item is credited to the echo's virtual inventory. No experience orbs.
+ * the ground, and every dropped item is credited to the echo's virtual inventory (nothing is credited while the
+ * doTileDrops game rule is off, because nothing drops). No experience orbs.
  */
 final class BlockBreakHandler implements ReplayHandler<BlockBreak> {
 	@Override
@@ -37,10 +39,12 @@ final class BlockBreakHandler implements ReplayHandler<BlockBreak> {
 		if (drops) {
 			List<ItemStack> stacks = Block.getDrops(state, level, pos, blockEntity, ctx.echo(), tool);
 			VirtualInventory inventory = ctx.inventory();
+			// no drops on the ground (doTileDrops off) = no credits either
+			boolean credit = level.getGameRules().get(GameRules.BLOCK_DROPS);
 			for (ItemStack stack : stacks) {
 				if (stack.isEmpty()) continue;
 				// read before popping: the item entity may merge and change the stack
-				inventory.add(Ids.item(stack), stack.getCount());
+				if (credit) inventory.add(Ids.item(stack), stack.getCount());
 				Block.popResource(level, pos, stack);
 			}
 			state.spawnAfterBreak(level, pos, tool, false);

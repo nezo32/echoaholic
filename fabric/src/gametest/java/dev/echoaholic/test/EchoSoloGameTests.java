@@ -41,6 +41,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.PressurePlateBlock;
@@ -219,7 +220,10 @@ public class EchoSoloGameTests {
 
 	// ---------------------------------------------------------------------------------------------- freeTnt
 
-	/** freeTnt=false: TNT needs a credit like any block; freeTnt=true: placed without one. */
+	/**
+	 * freeTnt=false: TNT needs a credit like any block (and is then placed as a block); freeTnt=true: without a credit
+	 * it is primed at once (never a minable block).
+	 */
 	@GameTest(environment = NS + "solo_freetnt", maxTicks = 300)
 	public void freeTntOff(GameTestHelper h) {
 		EchoConfig before = withConfig(h, c -> c.withFreeTnt(false));
@@ -233,6 +237,14 @@ public class EchoSoloGameTests {
 		long tC = s.now();
 		s.tick(tnt(c)).idle(10);
 		Replay r = SyntheticStreams.replay(h, s);
+		boolean[] primedAtC = {false}, primedElsewhere = {false};
+		h.onEachTick(() -> {
+			for (PrimedTnt p : TestSupport.entities(h, PrimedTnt.class, around(h, 4))) {
+				if (p.blockPosition().equals(c)) primedAtC[0] = true;
+				else primedElsewhere[0] = true;
+				p.discard(); // never explode in the test grid
+			}
+		});
 		h.startSequence()
 				.thenWaitUntil(() -> h.assertTrue(r.cursor() > tA, "past A"))
 				.thenExecute(() -> {
@@ -248,7 +260,9 @@ public class EchoSoloGameTests {
 				.thenWaitUntil(() -> h.assertTrue(r.cursor() > tC, "past C"))
 				.thenExecute(() -> {
 					try {
-						h.assertTrue(h.getLevel().getBlockState(c).is(Blocks.TNT), "freeTnt=true: placed without a credit");
+						h.assertTrue(primedAtC[0], "freeTnt=true without a credit: primed at once");
+						h.assertTrue(h.getLevel().getBlockState(c).isAir(), "free TNT never exists as a block: " + h.getLevel().getBlockState(c));
+						h.assertTrue(!primedElsewhere[0], "no other TNT was primed (A skipped, B placed as a block)");
 						h.assertValueEqual(r.echo().inventory.count("minecraft:tnt"), 0, "no credit needed");
 					} finally {
 						h.getLevel().setBlock(b, Blocks.AIR.defaultBlockState(), 2);

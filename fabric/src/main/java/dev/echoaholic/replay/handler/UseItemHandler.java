@@ -50,7 +50,7 @@ import net.minecraft.world.phys.AABB;
  * <li>bucket empty: needs a filled-bucket credit; fish/axolotl/tadpole buckets empty plain water (no mob copies);</li>
  * <li>ignite: fire or lighting a campfire/candle; a fire charge needs a credit;</li>
  * <li>TNT ignite: primes the TNT still at the position (respects the tntExplodes game rule);</li>
- * <li>shears: pumpkin carving (4 seeds, credited) and growing-plant capping; entity shearing of a ready mob of the
+ * <li>shears: pumpkin carving (4 seeds, credited unless doTileDrops is off) and growing-plant capping; entity shearing of a ready mob of the
  * recorded type within 2 blocks;</li>
  * <li>bone meal: needs a credit.</li>
  * </ul>
@@ -215,7 +215,8 @@ final class UseItemHandler implements ReplayHandler<UseItem> {
 			Direction face = WorldHandlers.direction(a.face());
 			Direction facing = face == null || face.getAxis() == Direction.Axis.Y ? echo.getDirection().getOpposite() : face;
 			ItemStack seeds = new ItemStack(Items.PUMPKIN_SEEDS, PUMPKIN_SEEDS);
-			ctx.inventory().add(Ids.item(seeds), seeds.getCount());
+			// credited only when the seeds really drop (doTileDrops)
+			if (level.getGameRules().get(GameRules.BLOCK_DROPS)) ctx.inventory().add(Ids.item(seeds), seeds.getCount());
 			Block.popResourceFromFace(level, pos, facing, seeds);
 			level.playSound(null, pos, SoundEvents.PUMPKIN_CARVE, SoundSource.BLOCKS, 1.0F, 1.0F);
 			level.setBlock(pos, Blocks.CARVED_PUMPKIN.defaultBlockState().setValue(CarvedPumpkinBlock.FACING, facing),

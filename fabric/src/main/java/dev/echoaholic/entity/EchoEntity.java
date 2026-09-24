@@ -39,7 +39,7 @@ public class EchoEntity extends Mannequin {
 
 	/** Largest horizontal (and free-flight) step toward the target per tick, in blocks. */
 	private static final double MAX_STEP = 4.0;
-	/** Largest vertical step per tick when flying, swimming or climbing. */
+	/** Largest vertical step per tick when swimming or climbing (elytra flight uses {@link #MAX_STEP}). */
 	private static final double MAX_FLY_STEP_Y = 0.5;
 	/** Less horizontal movement than this in a tick, while colliding, counts as blocked. */
 	private static final double MIN_PROGRESS = 0.05;
@@ -58,6 +58,7 @@ public class EchoEntity extends Mannequin {
 
 	private @Nullable Vec3 steerTarget;
 	private boolean steerFreeFlight;
+	private boolean steerFallFlying;
 	private boolean steerBlocked;
 	private boolean flying;
 	private boolean cheap;
@@ -129,7 +130,7 @@ public class EchoEntity extends Mannequin {
 			return;
 		}
 		Vec3 target = steerTarget;
-		if (target == null || collapseTicks > 0 || hurtTime > KNOCKBACK_TICKS) {
+		if (target == null || isDeadOrDying() || collapseTicks > 0 || hurtTime > KNOCKBACK_TICKS) {
 			setFlying(false);
 			steerBlocked = false;
 			super.travel(Vec3.ZERO);
@@ -142,7 +143,9 @@ public class EchoEntity extends Mannequin {
 		double dz = Mth.clamp(target.z - startZ, -MAX_STEP, MAX_STEP);
 		boolean fly = steerFreeFlight || isInWater() || isInLava() || onClimbable();
 		setFlying(fly);
-		double vy = fly ? Mth.clamp(dy, -MAX_FLY_STEP_Y, MAX_FLY_STEP_Y) : getDeltaMovement().y;
+		// elytra flight dives and climbs as fast as it moves horizontally; swimming/climbing stays gentle
+		double maxDy = steerFallFlying ? MAX_STEP : MAX_FLY_STEP_Y;
+		double vy = fly ? Mth.clamp(dy, -maxDy, maxDy) : getDeltaMovement().y;
 		setDeltaMovement(dx, vy, dz);
 		if (!fly && dy > 0.5 && onGround() && (horizontalCollision || dy > 0.6)) {
 			jumpFromGround();
