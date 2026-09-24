@@ -61,12 +61,13 @@ class StreamStoreTest {
 	}
 
 	@Test
-	void freshSegmentIsReadableAtOnce() throws Exception {
+	void freshSegmentIsDecodedOffTheServerThread() throws Exception {
 		store.append(OWNER, sealed(0, 0, 20));
 		assertEquals(List.of(new SegmentMeta(0, 0, 20, sealed(0, 0, 20).bytes().length)), store.ring(OWNER).segments());
+		assertNull(store.cached(OWNER, 0)); // cached() never decodes
 		CompletableFuture<DecodedSegment> f = store.load(OWNER, 0);
-		assertTrue(f.isDone());
-		assertEquals(20, f.join().tickCount());
+		assertSame(f, store.load(OWNER, 0)); // one decode per segment
+		assertEquals(20, await(f).tickCount());
 		assertSame(f.join(), store.cached(OWNER, 0));
 	}
 
@@ -76,14 +77,10 @@ class StreamStoreTest {
 		store.flush(true);
 		// prove no disk read: remove the files of the newest segments
 		for (int i = 2; i < 6; i++) Files.delete(SegmentFiles.segmentPath(dir(), i));
-		assertNotNull(store.cached(OWNER, 5)); // decoded from memory without a future
-		for (int i = 2; i < 5; i++) {
-			CompletableFuture<DecodedSegment> f = store.load(OWNER, i);
-			assertTrue(f.isDone() && !f.isCompletedExceptionally(), "seq " + i);
-		}
+		for (int i = 2; i < 6; i++) assertEquals(i * 20L, await(store.load(OWNER, i)).startTick(), "seq " + i);
+		for (int i = 2; i < 6; i++) assertNotNull(store.cached(OWNER, i));
 		// older than the last RECENT_PER_OWNER: read from disk
-		CompletableFuture<DecodedSegment> old = store.load(OWNER, 1);
-		assertEquals(20, await(old).startTick());
+		assertEquals(20, await(store.load(OWNER, 1)).startTick());
 	}
 
 	@Test
@@ -186,7 +183,7 @@ class StreamStoreTest {
 		store.close();
 		store.append(OWNER, sealed(1, 20, 20)); // ring updated, write dropped with a warning
 		assertTrue(store.load(OWNER, 1).isCompletedExceptionally());
-		assertNotNull(store.load(OWNER, 0).getNow(null)); // written before close, still in memory
+		assertTrue(store.load(OWNER, 0).isCompletedExceptionally());
 		assertNotNull(store.ring(OWNER));
 		store.close(); // idempotent
 	}

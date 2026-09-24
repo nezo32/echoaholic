@@ -41,9 +41,10 @@ import org.jspecify.annotations.Nullable;
  * before the index that lists it, and a deletion always follows the writes queued before it.
  *
  * <p><b>Freshly sealed segments</b> are readable without a disk read: {@link #append} keeps the bytes of each player's
- * last {@value #RECENT_PER_OWNER} segments in a pending table, also after the IO thread has written them, until the
- * first {@link #load} / {@link #cached} decodes them into the LRU cache (or they are evicted, wiped, or pushed out by
- * newer segments). So an echo replaying the newest segments never waits for the IO thread.
+ * last {@value #RECENT_PER_OWNER} segments in a pending table, also after the IO thread has written them, until a
+ * {@link #load} of them has been decoded into the LRU cache (or they are evicted, wiped, or pushed out by newer
+ * segments). {@link #load} decodes such bytes on the IO thread (no disk read, never a decode on the server thread: all
+ * echoes of a player cross a segment boundary on the same tick); the replay loop's prefetch calls it ahead of time.
  *
  * <p><b>Failures</b> never reach the game: a failed write drops the pending bytes (a later load of that segment fails,
  * and the replay loop skips the gap), a failed read fails the future, and each player's first problem is logged as a
@@ -210,29 +211,21 @@ public final class StreamStore implements AutoCloseable {
 	}
 
 	/**
-	 * The decoded segment if it is in the cache, a finished load just delivered it, or it is one of the player's recent
-	 * segments still in memory (decoded here, no disk access); else null. Never starts a disk read.
+	 * The decoded segment if it is in the cache (or a finished {@link #load} just delivered it), else null. Never
+	 * decodes or reads anything.
 	 */
 	public @Nullable DecodedSegment cached(UUID owner, long seq) {
 		Key key = new Key(owner, seq);
 		DecodedSegment hit = cache.get(key);
 		if (hit != null) return hit;
 		CompletableFuture<DecodedSegment> f = loading.get(key);
-		if (f != null) return promote(key, f);
-		byte[] bytes = pending.get(key);
-		if (bytes == null) return null;
-		try {
-			return decodePending(key, bytes);
-		} catch (IOException e) {
-			warn(owner, "Echoaholic could not decode a fresh segment " + seq + " of " + owner, e);
-			loading.put(key, CompletableFuture.failedFuture(e));
-			return null;
-		}
+		return f != null ? promote(key, f) : null;
 	}
 
 	/**
-	 * The decoded segment {@code seq} of the player. Already completed when it is cached or still pending (decoded right
-	 * here); otherwise the file is read and decoded on the IO thread and the future completes there. Repeated calls
+	 * The decoded segment {@code seq} of the player. Already completed when it is cached; otherwise it is decoded on the
+	 * IO thread, from memory for one of the player's recent segments, else from its file, and the future completes
+	 * there. The server thread never decodes. Repeated calls
 	 * while a load runs return the same future. A future that failed (missing or damaged file) stays failed: treat the
 	 * segment as a gap.
 	 */
@@ -245,18 +238,8 @@ public final class StreamStore implements AutoCloseable {
 			DecodedSegment done = promote(key, running);
 			return done != null ? CompletableFuture.completedFuture(done) : running;
 		}
-		byte[] bytes = pending.get(key);
-		if (bytes != null) {
-			try {
-				return CompletableFuture.completedFuture(decodePending(key, bytes));
-			} catch (IOException e) {
-				warn(owner, "Echoaholic could not decode a fresh segment " + seq + " of " + owner, e);
-				CompletableFuture<DecodedSegment> failed = CompletableFuture.failedFuture(e);
-				loading.put(key, failed);
-				return failed;
-			}
-		}
 		if (loading.size() >= LOADING_SWEEP_THRESHOLD) sweepLoading();
+		byte[] bytes = pending.get(key); // immutable once appended: safe to hand to the IO thread
 		SegmentMeta expected = findMeta(owner, seq);
 		Path file = SegmentFiles.segmentPath(SegmentFiles.ownerDir(streamsDir, owner), seq);
 		CompletableFuture<DecodedSegment> future;
@@ -264,7 +247,9 @@ public final class StreamStore implements AutoCloseable {
 			future = CompletableFuture.failedFuture(new IOException("stream store closed"));
 		} else {
 			try {
-				future = CompletableFuture.supplyAsync(() -> read(owner, file, expected), io);
+				future = bytes != null
+						? CompletableFuture.supplyAsync(() -> decodeRecent(owner, file, bytes), io)
+						: CompletableFuture.supplyAsync(() -> read(owner, file, expected), io);
 			} catch (RejectedExecutionException e) {
 				future = CompletableFuture.failedFuture(e);
 			}
@@ -380,12 +365,14 @@ public final class StreamStore implements AutoCloseable {
 		}
 	}
 
-	/** Decodes in-memory bytes of a recent segment into the LRU cache; the bytes are released (the file serves later). */
-	private DecodedSegment decodePending(Key key, byte[] bytes) throws IOException {
-		DecodedSegment decoded = SegmentReader.decode(bytes);
-		cache.put(key, decoded);
-		pending.remove(key, bytes);
-		return decoded;
+	/** IO thread: decodes the in-memory bytes of a recent segment (no disk access). */
+	private DecodedSegment decodeRecent(UUID owner, Path file, byte[] bytes) {
+		try {
+			return SegmentReader.decode(bytes);
+		} catch (IOException e) {
+			warn(owner, "Echoaholic could not decode fresh segment " + SegmentFiles.describe(file) + "; it is skipped", e);
+			throw new CompletionException(e);
+		}
 	}
 
 	private @Nullable SegmentMeta findMeta(UUID owner, long seq) {
@@ -403,6 +390,7 @@ public final class StreamStore implements AutoCloseable {
 		DecodedSegment d = f.join();
 		loading.remove(key);
 		cache.put(key, d);
+		pending.remove(key); // decoded now; the file serves any later reload
 		return d;
 	}
 

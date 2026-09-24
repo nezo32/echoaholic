@@ -101,8 +101,23 @@ public class EchoPerfGameTests {
 		int[] maxOps = {0}, maxHazard = {0}, maxEchoes = {0};
 		long[] deferred = {0};
 		int[] start = {-1};
+		// per measured tick: nanos, server tick, echoes whose cursor crossed a segment boundary, advanced, stalled, GC ms
+		List<long[]> samples = new ArrayList<>();
+		long[] prevCursor = new long[ECHOES + 1];
+		long[] prevGc = {gcMillis()};
 		h.onEachTick(() -> {
 			m.drain();
+			int crossed = 0;
+			var ps = TestSupport.stream(h, owner);
+			for (int k = 1; k <= ECHOES; k++) {
+				var st = ps.echo(k);
+				if (st == null) continue;
+				if (prevCursor[k] > 0 && prevCursor[k] / SegmentWriter.SEGMENT_TICKS != st.cursor / SegmentWriter.SEGMENT_TICKS) crossed++;
+				prevCursor[k] = st.cursor;
+			}
+			long gc = gcMillis();
+			long gcDelta = gc - prevGc[0];
+			prevGc[0] = gc;
 			if (start[0] < 0) {
 				if (manager(h).entity(owner, ECHOES) != null) start[0] = (int) h.getTick();
 				return;
@@ -110,6 +125,7 @@ public class EchoPerfGameTests {
 			if (h.getTick() <= start[0] + WARMUP || nanos.size() >= MEASURE) return;
 			TickStats st = manager(h).lastTickStats();
 			nanos.add(st.nanos());
+			samples.add(new long[] {st.nanos(), h.getTick(), crossed, st.advanced(), st.stalled(), gcDelta});
 			maxOps[0] = Math.max(maxOps[0], st.blockOps());
 			maxHazard[0] = Math.max(maxHazard[0], st.hazardOps());
 			maxEchoes[0] = Math.max(maxEchoes[0], st.echoes());
@@ -140,6 +156,14 @@ public class EchoPerfGameTests {
 						"PERF stream bytes/hour dense-mining=%.0f (%.1f KiB/h, %d segments, %d bytes for %d ticks) walking=%.0f (%.1f KiB/h)",
 						denseBytesPerHour, denseBytesPerHour / 1024, segs.size(), denseBytes, streamTicks, walking, walking / 1024);
 				Echoaholic.LOGGER.info(line);
+				StringBuilder slow = new StringBuilder("PERF slowest ticks:");
+				samples.stream().sorted((x, y) -> Long.compare(y[0], x[0])).limit(5).forEach(x -> slow.append(String.format(
+						java.util.Locale.ROOT, " [%.2f ms at test tick %d: %d echoes crossed a segment boundary, advanced=%d stalled=%d, gc=%d ms]",
+						x[0] / 1e6, x[1], x[2], x[3], x[4], x[5])));
+				long crossingTicks = samples.stream().filter(x -> x[2] > 0).count();
+				slow.append(" | ticks with a boundary crossing: ").append(crossingTicks).append('/').append(samples.size());
+				Echoaholic.LOGGER.info(slow.toString());
+				System.out.println(slow);
 				Echoaholic.LOGGER.info(bytes);
 				System.out.println(line);
 				System.out.println(bytes);
@@ -156,6 +180,12 @@ public class EchoPerfGameTests {
 				discardAll(h, ItemEntity.class, TestSupport.around(h, 4));
 			}
 		}).thenSucceed();
+	}
+
+	private static long gcMillis() {
+		long t = 0;
+		for (var gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) t += Math.max(0, gc.getCollectionTime());
+		return t;
 	}
 
 	private static Vec3 col(GameTestHelper h, int x, int z) {
