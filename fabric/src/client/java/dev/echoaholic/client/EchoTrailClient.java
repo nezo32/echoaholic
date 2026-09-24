@@ -1,7 +1,10 @@
 package dev.echoaholic.client;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 import dev.echoaholic.net.EchoTrailPayload;
@@ -13,6 +16,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.Particle;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * The optional path trail ({@code showTrail}): the server sends each nearby echo's recorded path for the next
@@ -23,11 +27,15 @@ import net.minecraft.world.entity.Entity;
 public final class EchoTrailClient {
 	public static final int EXPIRE_TICKS = 40;
 	public static final int SPAWN_EVERY = 2;
-	public static final int PARTICLE_LIFETIME = 20;
+	public static final int PARTICLE_LIFETIME = 10;
+	/** Only the trails of this many echoes nearest the camera are drawn per cycle. */
+	public static final int MAX_DRAWN = 8;
 	public static final float DUST_SCALE = 0.8f;
 	private static final DustParticleOptions DUST = new DustParticleOptions(EchoRenderTint.RGB, DUST_SCALE);
 
 	private record Trail(float[] xyz, long receivedAt) {}
+
+	private record Candidate(float[] xyz, double distSqr) {}
 
 	private static final Map<Integer, Trail> TRAILS = new HashMap<>();
 	private static long clientTicks;
@@ -67,6 +75,8 @@ public final class EchoTrailClient {
 		}
 		if (TRAILS.isEmpty() || mc.isPaused()) return;
 		boolean draw = NotifyConfig.get().trail() && clientTicks % SPAWN_EVERY == 0;
+		List<Candidate> candidates = draw ? new ArrayList<>() : null;
+		Vec3 cam = mc.gameRenderer.mainCamera().position();
 		for (Iterator<Map.Entry<Integer, Trail>> it = TRAILS.entrySet().iterator(); it.hasNext(); ) {
 			Map.Entry<Integer, Trail> e = it.next();
 			Trail trail = e.getValue();
@@ -75,7 +85,14 @@ public final class EchoTrailClient {
 				it.remove();
 				continue;
 			}
-			if (draw) spawn(mc, trail.xyz());
+			if (draw) candidates.add(new Candidate(trail.xyz(), entity.distanceToSqr(cam)));
+		}
+		if (!draw || candidates.isEmpty()) return;
+		if (candidates.size() > MAX_DRAWN) {
+			candidates.sort(Comparator.comparingDouble(Candidate::distSqr));
+		}
+		for (int i = 0; i < Math.min(MAX_DRAWN, candidates.size()); i++) {
+			spawn(mc, candidates.get(i).xyz());
 		}
 	}
 
