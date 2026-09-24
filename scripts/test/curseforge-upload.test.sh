@@ -13,8 +13,8 @@ pass() { echo "ok   - $*"; }
 fail() { echo "FAIL - $*"; failures=$((failures + 1)); }
 
 # dummy build outputs
-printf 'jar' > "$tmp/enchantaholic-1.2.0-beta.1.jar"
-printf 'src' > "$tmp/enchantaholic-1.2.0-beta.1-sources.jar"
+printf 'jar' > "$tmp/echoaholic-1.2.0-beta.1.jar"
+printf 'src' > "$tmp/echoaholic-1.2.0-beta.1-sources.jar"
 
 run_upload() { # runs the script in dry-run mode; combined output -> $tmp/out, exit code -> $rc
   rc=0
@@ -37,7 +37,7 @@ meta() { # $1 = n: the n-th (1-based) dry-run metadata JSON object printed by th
 run_upload \
   CF_GAME_VERSIONS='26.2,26.3,Fabric,Java 25,Client,Server' \
   CF_RELATIONS='fabric-api:requiredDependency' \
-  bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar" "$tmp/enchantaholic-1.2.0-beta.1-sources.jar"
+  bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar" "$tmp/echoaholic-1.2.0-beta.1-sources.jar"
 if [[ $rc -ne 0 ]]; then
   fail "dry-run exited $rc"; cat "$tmp/out"; exit 1
 fi
@@ -60,7 +60,7 @@ fi
 
 # primary metadata basics
 if jq -e '.releaseType == "beta" and .changelog == "## Changes" and .changelogType == "markdown"
-          and .displayName == "enchantaholic-1.2.0-beta.1.jar"' <<<"$primary" >/dev/null; then
+          and .displayName == "echoaholic-1.2.0-beta.1.jar"' <<<"$primary" >/dev/null; then
   pass "primary metadata (releaseType, changelog, displayName)"
 else
   fail "primary metadata: $primary"
@@ -68,7 +68,7 @@ fi
 
 # (c) the child file is attached via parentFileID and carries no gameVersions
 if jq -e 'has("parentFileID") and (has("gameVersions") | not)
-          and .displayName == "enchantaholic-1.2.0-beta.1-sources.jar"' <<<"$child" >/dev/null; then
+          and .displayName == "echoaholic-1.2.0-beta.1-sources.jar"' <<<"$child" >/dev/null; then
   pass "(c) child file has parentFileID and no gameVersions"
 else
   fail "(c) unexpected child metadata: ${child:-<none>}"
@@ -81,7 +81,7 @@ else
 fi
 
 # --- (d) unknown version fails with suggestions ---------------------------------------------
-run_upload CF_GAME_VERSIONS='26.9,Fabric' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload CF_GAME_VERSIONS='26.9,Fabric' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q "Similar:" "$tmp/out" && grep -q "'26.9' not found" "$tmp/out"; then
   pass "(d) unknown 26.9 exits $rc with 'Similar:'"
 else
@@ -89,14 +89,14 @@ else
 fi
 
 # --- guards ---------------------------------------------------------------------------------
-run_upload CF_DRY_RUN=false CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload CF_DRY_RUN=false CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q "CF_TOKEN is required" "$tmp/out"; then
   pass "real upload without CF_TOKEN is refused"
 else
   fail "missing token not rejected: rc=$rc $(cat "$tmp/out")"
 fi
 
-run_upload CF_GAME_VERSIONS='26.2' CF_RELATIONS='fabric-api:needed' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload CF_GAME_VERSIONS='26.2' CF_RELATIONS='fabric-api:needed' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q "bad relation type" "$tmp/out"; then
   pass "bad relation type is rejected"
 else
@@ -105,7 +105,7 @@ fi
 
 # --- Bedrock host: no usable /game/version-types, so prefixes are "" and types are not read ----
 run_upload CF_TYPE_PREFIXES='' CF_TYPES_JSON=/nonexistent CF_VERSIONS_JSON="$here/fixtures/versions-bedrock.json" \
-  CF_GAME_VERSIONS='26.50' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+  CF_GAME_VERSIONS='26.50' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -eq 0 ]] && jq -e '.gameVersions == [15002]' <<<"$(meta 1)" >/dev/null; then
   pass "Bedrock: CF_TYPE_PREFIXES='' resolves 26.50 without version types"
 else
@@ -113,21 +113,21 @@ else
 fi
 
 echo '' > "$tmp/empty-types.json"
-run_upload CF_TYPES_JSON="$tmp/empty-types.json" CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload CF_TYPES_JSON="$tmp/empty-types.json" CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q 'returned no version types' "$tmp/out"; then
   pass "empty version-types with prefixes set fails with a hint"
 else
   fail "empty version-types: rc=$rc $(cat "$tmp/out")"
 fi
 
-run_upload CF_GAME_VERSIONS=' , ' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload CF_GAME_VERSIONS=' , ' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q 'no game versions given' "$tmp/out"; then
   pass "empty game versions are rejected"
 else
   fail "empty game versions: rc=$rc $(cat "$tmp/out")"
 fi
 
-run_upload CF_RELEASE_TYPE=rc CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload CF_RELEASE_TYPE=rc CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q 'CF_RELEASE_TYPE must be' "$tmp/out"; then
   pass "invalid release type is rejected"
 else
@@ -135,7 +135,7 @@ else
 fi
 
 mkdir -p "$tmp/nojq"; ln -s "$(command -v bash)" "$tmp/nojq/bash"; ln -s "$(command -v curl)" "$tmp/nojq/curl"
-run_upload PATH="$tmp/nojq" CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+run_upload PATH="$tmp/nojq" CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
 if [[ $rc -ne 0 ]] && grep -q 'jq is required' "$tmp/out"; then
   pass "missing jq is reported"
 else
@@ -166,15 +166,15 @@ if command -v python3 >/dev/null; then
   mkdir -p "$tmp/extra dir"; printf 'x' > "$tmp/extra dir/my mod-1.0.0-extra.jar"
   start_mock "$here/fixtures/types.json" 200 "$here/fixtures/versions.json"
   : > "$tmp/github_output"
-  run_real CF_CHANGELOG="$changelog" CF_DISPLAY_NAME='Enchantaholic 1.2.0 "beta" (Fabric)' \
+  run_real CF_CHANGELOG="$changelog" CF_DISPLAY_NAME='Echoaholic 1.2.0 "beta" (Fabric)' \
     CF_GAME_VERSIONS=$'26.2\nFabric' CF_RELATIONS=' fabric-api : requiredDependency , modmenu:optionalDependency ' \
-    bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar" "$tmp/enchantaholic-1.2.0-beta.1-sources.jar" "$tmp/extra dir/my mod-1.0.0-extra.jar"
+    bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar" "$tmp/echoaholic-1.2.0-beta.1-sources.jar" "$tmp/extra dir/my mod-1.0.0-extra.jar"
   u0="$tmp/mock/upload-0.json"
   if [[ $rc -eq 0 ]] && jq -e --arg c "$changelog" '.metadata.changelog == $c and .token == "test-token"
         and .metadata_content_type == "application/json" and .path == "/api/projects/1/upload-file"
-        and .metadata.displayName == "Enchantaholic 1.2.0 \"beta\" (Fabric)" and .metadata.gameVersions == [7499,16498]
+        and .metadata.displayName == "Echoaholic 1.2.0 \"beta\" (Fabric)" and .metadata.gameVersions == [7499,16498]
         and .metadata.relations.projects == [{"slug":"fabric-api","type":"requiredDependency"},{"slug":"modmenu","type":"optionalDependency"}]
-        and .filename == "enchantaholic-1.2.0-beta.1.jar" and .file == "jar"' "$u0" >/dev/null; then
+        and .filename == "echoaholic-1.2.0-beta.1.jar" and .file == "jar"' "$u0" >/dev/null; then
     pass "upload: tricky changelog/display name survive multipart + JSON escaping byte-for-byte"
   else
     fail "upload metadata: rc=$rc $(cat "$tmp/out"; cat "$u0" 2>/dev/null)"
@@ -189,7 +189,7 @@ if command -v python3 >/dev/null; then
 
   # a 5xx may still have created the file on CurseForge, so the POST must not be re-sent
   start_mock "$here/fixtures/types.json" 503,200 "$here/fixtures/versions.json"
-  run_real CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+  run_real CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
   if [[ $rc -ne 0 ]] && [[ -f "$tmp/mock/upload-0.json" && ! -f "$tmp/mock/upload-1.json" ]] \
      && grep -q 'HTTP 503.*Files page' "$tmp/out"; then
     pass "upload: HTTP 503 is not retried (no duplicate file) and says to check CurseForge"
@@ -198,7 +198,7 @@ if command -v python3 >/dev/null; then
   fi
 
   start_mock "$here/fixtures/types.json" 400 "$here/fixtures/versions.json"
-  run_real CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+  run_real CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
   if [[ $rc -ne 0 ]] && grep -q 'failed (HTTP 400).*mock failure 400' "$tmp/out" && [[ ! -f "$tmp/mock/upload-1.json" ]]; then
     pass "upload: HTTP 400 fails once (no retry) and shows the API error"
   else
@@ -206,7 +206,7 @@ if command -v python3 >/dev/null; then
   fi
 
   start_mock - 200 "$here/fixtures/versions-bedrock.json"
-  run_real CF_TYPE_PREFIXES='' CF_GAME_VERSIONS='26.50' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+  run_real CF_TYPE_PREFIXES='' CF_GAME_VERSIONS='26.50' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
   if [[ $rc -eq 0 ]] && jq -e '.metadata.gameVersions == [15002]' "$tmp/mock/upload-0.json" >/dev/null; then
     pass "upload: Bedrock-like host (empty version-types body) works with CF_TYPE_PREFIXES=''"
   else
@@ -215,7 +215,7 @@ if command -v python3 >/dev/null; then
 
   # CF_RETRY_DELAY=1 with 4 retries would take >= 4s if the 403 were retried
   started=$SECONDS
-  run_real CF_TOKEN=wrong CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+  run_real CF_TOKEN=wrong CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
   if [[ $rc -ne 0 ]] && [[ ! -f "$tmp/mock/upload-1.json" ]] && (( SECONDS - started < 3 )); then
     pass "upload: rejected token (403) fails at once, before any upload"
   else
@@ -225,7 +225,7 @@ if command -v python3 >/dev/null; then
 
   # nothing listening: the request never reached the server, so the upload is retried, then fails
   run_upload CF_DRY_RUN=false CF_TOKEN=test-token CF_API_BASE="http://127.0.0.1:1" CF_RETRY_DELAY=0 \
-    CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/enchantaholic-1.2.0-beta.1.jar"
+    CF_GAME_VERSIONS='26.2' bash "$script" "$tmp/echoaholic-1.2.0-beta.1.jar"
   if [[ $rc -ne 0 ]] && [[ "$(grep -c 'could not reach' "$tmp/out")" -eq 3 ]] && grep -q 'curl exit 7' "$tmp/out"; then
     pass "upload: connection errors are retried 3 times, then fail"
   else
@@ -239,9 +239,9 @@ fi
 if (
   shopt -s nullglob
   cd "$tmp"
-  primary_glob=( enchantaholic-!(*-sources).jar )
+  primary_glob=( echoaholic-!(*-sources).jar )
   template_glob=( !(*-sources).jar )
-  [[ "${primary_glob[*]}" == "enchantaholic-1.2.0-beta.1.jar" && "${template_glob[*]}" == "enchantaholic-1.2.0-beta.1.jar" ]]
+  [[ "${primary_glob[*]}" == "echoaholic-1.2.0-beta.1.jar" && "${template_glob[*]}" == "echoaholic-1.2.0-beta.1.jar" ]]
 ); then
   pass "primary-file globs match exactly the main jar"
 else
