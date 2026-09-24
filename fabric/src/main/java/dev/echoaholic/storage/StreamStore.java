@@ -43,8 +43,10 @@ import org.jspecify.annotations.Nullable;
  * <p><b>Freshly sealed segments</b> are readable without a disk read: {@link #append} keeps the bytes of each player's
  * last {@value #RECENT_PER_OWNER} segments in a pending table, also after the IO thread has written them, until a
  * {@link #load} of them has been decoded into the LRU cache (or they are evicted, wiped, or pushed out by newer
- * segments). {@link #load} decodes such bytes on the IO thread (no disk read, never a decode on the server thread: all
+ * segments). {@link #load} decodes such bytes on the IO thread (no disk read, no decode on the server thread: all
  * echoes of a player cross a segment boundary on the same tick); the replay loop's prefetch calls it ahead of time.
+ * An echo that needs a segment at once may use {@link #decodeNowIfResident}, capped at {@value #SYNC_DECODES_PER_TICK}
+ * server-thread decodes per tick ({@link #beginTick()}).
  *
  * <p><b>Failures</b> never reach the game: a failed write drops the pending bytes (a later load of that segment fails,
  * and the replay loop skips the gap), a failed read fails the future, and each player's first problem is logged as a
@@ -62,6 +64,8 @@ public final class StreamStore implements AutoCloseable {
 	private static final int LOADING_SWEEP_THRESHOLD = 64;
 	/** Newest segments per player whose bytes stay in memory until their first load. */
 	public static final int RECENT_PER_OWNER = 4;
+	/** Most {@link #decodeNowIfResident} decodes per server tick (see {@link #beginTick()}). */
+	public static final int SYNC_DECODES_PER_TICK = 2;
 
 	private record Key(UUID owner, long seq) {}
 
@@ -94,6 +98,7 @@ public final class StreamStore implements AutoCloseable {
 	private final Set<UUID> warned = ConcurrentHashMap.newKeySet();
 	private static final UUID STORE_KEY = new UUID(0L, 0L);
 	private boolean closed;
+	private int syncDecodesLeft = SYNC_DECODES_PER_TICK;
 
 	/** A store over {@code streamsDir} ({@code <world>/data/echoaholic/streams}); nothing is read until needed. */
 	public StreamStore(Path streamsDir) {
@@ -225,7 +230,7 @@ public final class StreamStore implements AutoCloseable {
 	/**
 	 * The decoded segment {@code seq} of the player. Already completed when it is cached; otherwise it is decoded on the
 	 * IO thread, from memory for one of the player's recent segments, else from its file, and the future completes
-	 * there. The server thread never decodes. Repeated calls
+	 * there. Never decodes on the server thread (only {@link #decodeNowIfResident} does, within its budget). Repeated calls
 	 * while a load runs return the same future. A future that failed (missing or damaged file) stays failed: treat the
 	 * segment as a gap.
 	 */
@@ -256,6 +261,38 @@ public final class StreamStore implements AutoCloseable {
 		}
 		loading.put(key, future);
 		return future;
+	}
+
+	/** Starts a server tick: refills the {@link #decodeNowIfResident} budget. Call once per tick before the replay loop. */
+	public void beginTick() {
+		syncDecodesLeft = SYNC_DECODES_PER_TICK;
+	}
+
+	/**
+	 * Bounded synchronous path for an echo that needs a segment right now (just spawned, restored): the decoded segment
+	 * if it is cached, or, when its bytes are still in memory (one of the player's recent segments) and this tick's
+	 * budget of {@value #SYNC_DECODES_PER_TICK} decodes is not used up, decoded here on the server thread and cached.
+	 * Otherwise null (use {@link #load}); never reads the disk. A decode failure fails the segment like {@link #load}.
+	 */
+	public @Nullable DecodedSegment decodeNowIfResident(UUID owner, long seq) {
+		DecodedSegment hit = cached(owner, seq);
+		if (hit != null) return hit;
+		Key key = new Key(owner, seq);
+		if (loading.containsKey(key) && loading.get(key).isCompletedExceptionally()) return null;
+		byte[] bytes = pending.get(key);
+		if (bytes == null || syncDecodesLeft <= 0) return null;
+		syncDecodesLeft--;
+		try {
+			DecodedSegment decoded = SegmentReader.decode(bytes);
+			loading.remove(key); // a running IO decode of the same bytes is simply superseded
+			cache.put(key, decoded);
+			pending.remove(key, bytes);
+			return decoded;
+		} catch (IOException e) {
+			warn(owner, "Echoaholic could not decode a fresh segment " + seq + " of " + owner, e);
+			loading.put(key, CompletableFuture.failedFuture(e));
+			return null;
+		}
 	}
 
 	/**

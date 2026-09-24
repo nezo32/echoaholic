@@ -84,6 +84,32 @@ class StreamStoreTest {
 	}
 
 	@Test
+	void synchronousDecodesAreBudgetedPerTick() throws Exception {
+		for (int i = 0; i < 4; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(OWNER, 0));
+		assertNotNull(store.decodeNowIfResident(OWNER, 1));
+		assertNull(store.decodeNowIfResident(OWNER, 2)); // budget of SYNC_DECODES_PER_TICK used up
+		assertNotNull(store.decodeNowIfResident(OWNER, 0)); // cache hits cost nothing
+		assertNotNull(store.cached(OWNER, 1));
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(OWNER, 2));
+		assertNotNull(store.decodeNowIfResident(OWNER, 3));
+		assertEquals(2, StreamStore.SYNC_DECODES_PER_TICK);
+	}
+
+	@Test
+	void synchronousDecodeNeedsBytesInMemory() throws Exception {
+		for (int i = 0; i < 6; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true);
+		store.beginTick();
+		assertNull(store.decodeNowIfResident(OWNER, 0)); // only on disk: no synchronous read
+		assertNull(store.decodeNowIfResident(OWNER, 99)); // unknown
+		assertNotNull(store.decodeNowIfResident(OWNER, 5)); // recent, decoded even after it was written
+		assertEquals(0, await(store.load(OWNER, 0)).startTick()); // disk path still works
+	}
+
+	@Test
 	void persistsAndReopensIdentically() throws Exception {
 		for (int i = 0; i < 5; i++) store.append(OWNER, sealed(i, i * 20L, 20));
 		store.flush(true);

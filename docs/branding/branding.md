@@ -16,7 +16,7 @@ Alt: *Five minutes ago, you were here too.*
 - ⚙️ **Toggle anywhere:** an ON/OFF button at world creation plus an operator command (`/echoaholic`) for existing worlds and servers. `/echoaholic pause` freezes every echo in place.
 - 💬 **Clear feedback:** an actionbar message and a soft chime announce each new echo, and each one wears a nametag like `Echo #7 · nezo`.
 - 🔕 **Your call on noise:** turn the join sound, the actionbar message or the ghost trail off (Mod Menu or `/echoaholic-notify`).
-- 🚦 **Lag-safe:** per-echo and per-server action budgets, and echoes far from every player switch to a cheap mode. Nothing is skipped, it just waits its turn.
+- 🚦 **Lag-safe:** per-echo and per-server action budgets, and echoes far from every player switch to a cheap mode. Nothing is skipped for lack of budget, it just waits its turn.
 - 👻 **Works for everyone:** players without the mod see echoes as player-like mannequins. With the mod, echoes glow translucent cyan and leave a trail.
 
 ## Color palette
@@ -53,7 +53,7 @@ In-game text: use `§b` (aqua) for `Echo #7` and the 👥, `§7` (gray) for `· 
 | `modmenu.descriptionTranslation.echoaholic` | Everything you do comes back. Every 5 minutes a ghostly Echo of you joins the world and replays everything you did, for real: it mines, builds and fights, and it never leaves. |
 | `echoaholic.createWorld.toggle` | Echoaholic Mode |
 | `echoaholic.createWorld.toggle.tooltip` | Everything you do is recorded. Every few minutes a translucent Echo of you joins the world and replays your whole history with a delay: it really mines, builds and fights, and never leaves. Saved with this world. Operators can change it later with /echoaholic on\|off. |
-| `echoaholic.createWorld.delay` | Echo Delay: %s |
+| `echoaholic.createWorld.delay` | Echo Delay |
 | `echoaholic.createWorld.delay.tooltip` | How far apart the echoes are. Echo #1 is this far behind you, Echo #2 twice as far, and so on. Operators can change it later with /echoaholic delay <minutes>. |
 | `echoaholic.minutes` | %s min |
 | `echoaholic.command.on` | Echoaholic Mode is now ON for this world |
@@ -63,18 +63,19 @@ In-game text: use `§b` (aqua) for `Echo #7` and the 👥, `§7` (gray) for `· 
 | `echoaholic.command.status.detail` | Echo Delay: %1$s, max %2$s echoes per player |
 | `echoaholic.command.delay.set` | Echo Delay is now %s for this world |
 | `echoaholic.command.max.set` | Max echoes per player is now %s for this world |
-| `echoaholic.command.paused` | Echoes are paused: recording and replay are frozen until /echoaholic resume |
+| `echoaholic.command.paused` | Echoes are paused: they stand still until /echoaholic resume |
 | `echoaholic.command.resumed` | Echoes are moving again |
 | `echoaholic.command.cleared` | Removed %1$s echoes of %2$s |
 | `echoaholic.command.modeOffHint` | (Echoaholic Mode is OFF, so nothing is recorded until you turn it on with /echoaholic on) |
 | `echoaholic.command.list.header` | Echoes of %1$s (%2$s/%3$s): |
-| `echoaholic.command.list.entry` | #%1$s · %2$s · %3$s behind · %4$s |
+| `echoaholic.command.list.entry` | #%1$s · %2$s · %3$s behind · %4$s · ❤ %5$s |
 | `echoaholic.command.list.empty` | %s has no echoes yet |
 | `echoaholic.command.config.value` | %1$s = %2$s |
 | `echoaholic.command.config.set` | %1$s is now %2$s for this world |
 | `echoaholic.command.config.unknown` | Unknown setting: %s |
+| `echoaholic.command.config.invalid` | Invalid value for %1$s: %2$s (allowed %3$s..%4$s) |
 | `echoaholic.echo.name` | `Echo #%1$s · %2$s` |
-| `echoaholic.message.joined` | `👥 Echo #%s has joined you` |
+| `echoaholic.message.joined` | `§b👥 Echo #%s has joined you` |
 | `echoaholic.message.faded` | Echo #%s has faded |
 | `echoaholic.activity.walking` | walking |
 | `echoaholic.activity.mining` | mining |
@@ -90,14 +91,15 @@ In-game text: use `§b` (aqua) for `Echo #7` and the 👥, `§7` (gray) for `· 
 | `echoaholic.settings.notifyMessage` | Echo message |
 | `echoaholic.settings.notifyMessage.tooltip` | Show the actionbar message (👥 Echo #7 has joined you) when a new Echo of you joins the world. |
 | `echoaholic.settings.showTrail` | Echo trail |
-| `echoaholic.settings.showTrail.tooltip` | Show a faint cyan trail of particles behind every echo for 5 seconds. |
+| `echoaholic.settings.showTrail.tooltip` | Show a faint cyan trail of particles along the path each echo will walk in the next 5 seconds. |
 | `echoaholic.command.notify.sound` | Echo sound: %s |
 | `echoaholic.command.notify.message` | Echo message: %s |
 | `echoaholic.command.notify.trail` | Echo trail: %s |
 
 Placeholders:
 - `echoaholic.command.list.header`: `%1$s` player name, `%2$s` echo count, `%3$s` max echoes.
-- `echoaholic.command.list.entry`: `%1$s` echo number, `%2$s` an `echoaholic.activity.*` component, `%3$s` the lag as an `echoaholic.minutes` component, `%4$s` position `x y z` (plus the dimension if it isn't the viewer's).
+- `echoaholic.command.list.entry`: `%1$s` echo number, `%2$s` an `echoaholic.activity.*` component, `%3$s` the lag as an `echoaholic.minutes` component, `%4$s` position `x y z` (plus the dimension if it isn't the viewer's), `%5$s` health, rounded to a whole number.
+- `echoaholic.command.config.invalid`: `%1$s` key, `%2$s` the value typed, `%3$s`..`%4$s` the allowed range (`false`..`true` for switches).
 - `echoaholic.command.cleared`: `%1$s` count, `%2$s` player name.
 - `echoaholic.message.faded` is optional: send it (actionbar, no sound) when the oldest echo is retired at the cap. Deaths stay silent.
 - `activity.collapsed` is the 3 s lie-down replaying the owner's death. `activity.waiting` means the echo is stalled (over budget, or blocked by terrain). A placement it has no materials for is skipped, not waited on. `activity.paused` means frozen (owner offline, `/echoaholic pause`, or an unloaded chunk).
@@ -113,7 +115,7 @@ Notes for developers. The logo is the style reference: cyan, translucent, fainte
 - **Nametag:** `echoaholic.echo.name` → `Echo #7 · nezo` (the `·` is U+00B7 MIDDLE DOT, with a space on each side). `Echo #7` in echo cyan `#7FE8FF` (`TextColor.fromRgb(0x7FE8FF)`), `· nezo` in gray `§7`. Always visible (`setCustomNameVisible(true)`). Vanilla clients see the same nametag on a plain mannequin.
 - **Tint (modded client):** multiply the skin by `#7FE8FF` (RGB 127, 232, 255) at **55 % alpha** (`0x8C7FE8FF` ARGB), drawn with a translucent render type (entity-translucent) so the world shows through. Held items and armor use the same tint and alpha. Optional: fade by age, alpha = 55 % for Echo #1 down to a floor of 35 % from Echo #8 on, so the newest echo looks the most solid. Don't tint the nametag.
 - **Collapse:** during the 3 s death replay, lie flat (`Pose.SLEEPING`-style or rotated), no tint change.
-- **Trail (modded client, `showTrail`):** `new DustParticleOptions(0x7FE8FF, 0.8F)`, one particle every 2 ticks at the echo's feet, 5 s lifetime window (the path of the last 5 s). Not in cheap mode. Alternative if dust reads too solid: `ParticleTypes.SCRAPE` (the cyan wax-off spark).
+- **Trail (modded client, `showTrail`):** `new DustParticleOptions(0x7FE8FF, 0.8F)` along the path the echo will walk in the next 5 s: the server sends up to 20 points (one every 5 stream ticks) every 10 ticks, and the client draws each point plus a midpoint every 2 client ticks. Not in cheap mode. Alternative if dust reads too solid: `ParticleTypes.SCRAPE` (the cyan wax-off spark).
 - **Spawn burst:** 12 × `ParticleTypes.END_ROD` in a small ring at the echo's feet, plus 6 × the trail dust, when the echo joins.
 - **Spawn sound:** `SoundEvents.ILLUSIONER_MIRROR_MOVE` (the illusioner making copies of itself), `SoundSource.PLAYERS`, volume 0.5, pitch 1.3, at the echo's position. The same sound plays locally for the owner as the notification chime (client setting `notifySound`). Softer alternative: `SoundEvents.AMETHYST_BLOCK_RESONATE`, volume 0.6, pitch 1.2.
 - **Ambient:** now and then (every 15–30 s at random), `SoundEvents.SOUL_ESCAPE` at volume 0.15, pitch 1.4. It's a `Holder.Reference`, so use `.value()`. Footsteps are the normal step sounds of the blocks walked on.
