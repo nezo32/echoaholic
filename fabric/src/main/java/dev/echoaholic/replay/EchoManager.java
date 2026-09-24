@@ -236,12 +236,15 @@ public final class EchoManager implements EchoListener {
 
 		if (!active) {
 			e.steer(null, e.getYRot(), e.getXRot(), false);
+			if (st.collapseTicks > 0) e.startCollapse(st.collapseTicks); // stay down while frozen
 			rt.activity = Activity.PAUSED;
 			return FROZEN;
 		}
 
 		if (st.collapseTicks > 0) {
 			st.collapseTicks--;
+			// the manager's hold drives the collapse: re-arm the entity so it never stands up before the hold ends
+			if (st.collapseTicks > 0) e.startCollapse(st.collapseTicks);
 			e.steer(null, e.getYRot(), e.getXRot(), false);
 			rt.activity = Activity.COLLAPSED;
 			return STALLED;
@@ -256,9 +259,26 @@ public final class EchoManager implements EchoListener {
 
 		long c = st.cursor;
 		TickEntry entry = entryAt(rt, seg, c);
+		// A tick with a Teleport / Dimension / Death: its move sample is already the destination, so walking there first
+		// would never succeed. Run the leading meta actions first (they relocate the echo), then check the reach.
+		if (hasPendingJump(entry, st.actionsDone)) {
+			List<Action> actions = entry.actions();
+			ctx.bind(rt, cfg, b, c);
+			while (st.actionsDone < actions.size() && isMeta(actions.get(st.actionsDone))) {
+				ReplayHandler.Result r = ReplayHandlers.dispatch(ctx, actions.get(st.actionsDone));
+				if (rt.removed) return GONE;
+				if (r == ReplayHandler.Result.WAIT) {
+					rt.activity = Activity.WAITING;
+					return STALLED;
+				}
+				st.actionsDone++;
+				if (rt.entity == null) return STALLED; // respawn in a level position that is not ticking yet
+			}
+			e = rt.entity;
+			level = level(rt);
+		}
 		Move target = seg.positionAt(c).orElse(null);
-		// A tick with a pending Teleport / Dimension / Death: its move sample is already the destination (or the death
-		// spot), so walking there first would never succeed. Run the tick's actions right away; they relocate the echo.
+		// A jump action still pending behind a world action: do not walk, the actions run in order below.
 		if (target != null && !hasPendingJump(entry, st.actionsDone)) {
 			if (rt.cheap) {
 				e.snapTo(target.x(), target.y(), target.z(), target.yRot(), target.xRot());
@@ -342,6 +362,13 @@ public final class EchoManager implements EchoListener {
 			if (a instanceof Dimension || a instanceof Teleport || a instanceof Death) return true;
 		}
 		return false;
+	}
+
+	/** Actions that only affect the echo itself and may run before the reach check. */
+	private static boolean isMeta(Action a) {
+		ActionType<?> t = a.type();
+		return t == ActionTypes.TELEPORT || t == ActionTypes.DIMENSION || t == ActionTypes.DEATH || t == ActionTypes.POSE
+				|| t == ActionTypes.SWING;
 	}
 
 	private void steer(EchoRuntime rt, EchoEntity e, Move target) {
