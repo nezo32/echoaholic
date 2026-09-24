@@ -257,7 +257,7 @@ class SegmentTest {
 
 	@Test
 	void corruptionIsIOException() {
-		int mk = SegmentFormat.MOVE | SegmentFormat.KEYFRAME;
+		final byte mk = SegmentFormat.MOVE | SegmentFormat.KEYFRAME;
 		List<byte[]> bad = List.of(
 				new byte[0],
 				new byte[] {1, 2, 3, 4},
@@ -270,7 +270,7 @@ class SegmentTest {
 				sealedFrom(1, 0, 10, new byte[] {1, (byte) 0x80}), // unknown flag
 				sealedFrom(1, 0, 10, new byte[] {1, 0}), // empty entry
 				sealedFrom(1, 0, 10, new byte[] {1, SegmentFormat.MOVE | SegmentFormat.DX, 2}), // delta before keyframe
-				sealedFrom(1, 0, 10, new byte[] {1, mk | SegmentFormat.DX, 0, 0, 0, 0, 0}), // keyframe with delta flag
+				sealedFrom(1, 0, 10, new byte[] {1, (byte) (mk | SegmentFormat.DX), 0, 0, 0, 0, 0}), // keyframe with delta flag
 				sealedFrom(1, 0, 10, new byte[] {1, SegmentFormat.ROT, 0, 0}), // move flag without move
 				sealedFrom(1, 0, 10, new byte[] {1, SegmentFormat.ACTIONS, 0}), // zero actions
 				sealedFrom(1, 0, 10, new byte[] {1, SegmentFormat.ACTIONS, 1, 99}), // unknown action id
