@@ -78,6 +78,15 @@ public class EchoPerfGameTests {
 		long streamTicks = s.length();
 		int stride = (int) (streamTicks / ECHOES);
 
+		// solo batch: echoes left behind by earlier (failed) tests would distort the numbers
+		int leftovers = 0;
+		for (var ps : java.util.List.copyOf(es(h).data().players())) {
+			if (!ps.echoes.isEmpty()) {
+				leftovers += ps.echoes.size();
+				es(h).clear(ps.owner);
+			}
+		}
+		if (leftovers > 0) Echoaholic.LOGGER.warn("PERF cleared {} echoes left over by earlier tests", leftovers);
 		UUID owner = UUID.randomUUID();
 		SyntheticStreams.inject(es(h), owner, segs);
 		Mock m = TestSupport.mock(h, owner);
@@ -106,8 +115,9 @@ public class EchoPerfGameTests {
 			maxEchoes[0] = Math.max(maxEchoes[0], st.echoes());
 			deferred[0] += st.deferred();
 		});
-		h.succeedWhen(() -> {
+		h.startSequence().thenWaitUntil(() -> {
 			h.assertTrue(nanos.size() >= MEASURE, "measuring: " + nanos.size() + "/" + MEASURE);
+		}).thenExecute(() -> {
 			try {
 				awaitEcho(h, owner, 1);
 				long[] sorted = nanos.stream().mapToLong(Long::longValue).sorted().toArray();
@@ -145,7 +155,7 @@ public class EchoPerfGameTests {
 				cleanup(h, owner);
 				discardAll(h, ItemEntity.class, TestSupport.around(h, 4));
 			}
-		});
+		}).thenSucceed();
 	}
 
 	private static Vec3 col(GameTestHelper h, int x, int z) {

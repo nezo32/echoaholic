@@ -117,6 +117,34 @@ public final class DecodedSegment {
 		return Optional.of(new Move(lerp(a.x(), b.x(), t), lerp(a.y(), b.y(), t), lerp(a.z(), b.z(), t), yaw, pitch));
 	}
 
+	/**
+	 * Allocation-free {@link #positionAt(long)}: writes x, y, z, yRot, xRot into {@code out[0..4]} and returns true, or
+	 * returns false (out untouched) when the segment has no sample at or before {@code tick}. Tick outside the segment
+	 * -> IllegalArgumentException.
+	 */
+	public boolean positionAt(long tick, double[] out) {
+		requireContains(tick);
+		int i = floorIndex(moveTicks, tick);
+		if (i < 0) return false;
+		Move a = moves[i];
+		if (moveTicks[i] == tick || i + 1 >= moves.length || jumpTo[i + 1] || a.distanceTo(moves[i + 1]) > JUMP_DISTANCE) {
+			out[0] = a.x();
+			out[1] = a.y();
+			out[2] = a.z();
+			out[3] = a.yRot();
+			out[4] = a.xRot();
+			return true;
+		}
+		Move b = moves[i + 1];
+		double t = (tick - moveTicks[i]) / (double) (moveTicks[i + 1] - moveTicks[i]);
+		out[0] = lerp(a.x(), b.x(), t);
+		out[1] = lerp(a.y(), b.y(), t);
+		out[2] = lerp(a.z(), b.z(), t);
+		out[3] = wrap(a.yRot() + (float) (Move.angleDelta(a.yRot(), b.yRot()) * t));
+		out[4] = (float) (a.xRot() + (b.xRot() - a.xRot()) * t);
+		return true;
+	}
+
 	private static double lerp(double a, double b, double t) {
 		return a + (b - a) * t;
 	}

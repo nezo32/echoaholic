@@ -320,7 +320,9 @@ public class EchoWorldActionGameTests {
 				})
 				.thenIdle(1)
 				.thenExecute(() -> {
-					p.kill(h.getLevel());
+					// kill() is ignored for a mock player (invulnerable until its client "loaded"): die directly
+					p.setHealth(0f);
+					p.die(h.getLevel().damageSources().genericKill());
 					h.assertTrue(p.isDeadOrDying(), "owner died (health " + p.getHealth() + ")");
 				})
 				.thenIdle(2)

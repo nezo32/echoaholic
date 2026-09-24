@@ -14,6 +14,9 @@ import java.util.Map;
  * so over-budget work is delayed, never dropped.
  */
 public final class BudgetScheduler {
+	/** More remembered echo ids than this and {@link #beginTick} forgets them all. */
+	static final int MAX_REMEMBERED = 4096;
+
 	private final Map<Object, EchoBudget> budgets = new HashMap<>();
 	private long rotation = -1;
 	private int globalBlockOps;
@@ -32,7 +35,8 @@ public final class BudgetScheduler {
 		hazardOpsUsed = 0;
 		lookupsUsed = 0;
 		deferred = 0;
-		budgets.clear();
+		// budgets are reused across ticks (refilled lazily by forEcho); drop them only if ids piled up
+		if (budgets.size() > MAX_REMEMBERED) budgets.clear();
 		rotation++;
 	}
 
@@ -47,11 +51,37 @@ public final class BudgetScheduler {
 	}
 
 	/**
+	 * Like {@link #order(List)} but fills {@code out} (cleared first) instead of allocating a new list; returns it. Must
+	 * not be the same list as {@code echoes}.
+	 */
+	public <T> List<T> order(List<T> echoes, List<T> out) {
+		if (out == echoes) throw new IllegalArgumentException("out must differ from echoes");
+		out.clear();
+		int n = echoes.size();
+		if (n == 0) return out;
+		int start = (int) Math.floorMod(rotation < 0 ? 0 : rotation, (long) n);
+		for (int i = 0; i < n; i++) out.add(echoes.get((start + i) % n));
+		return out;
+	}
+
+	/**
 	 * Budget of one echo for the current tick. Asking again for the same id in the same tick returns the same budget
-	 * (caps are not refilled).
+	 * (caps are not refilled). Budget objects are reused from tick to tick (refilled on the first request of a tick), so
+	 * this does not allocate after an id's first tick.
 	 */
 	public EchoBudget forEcho(Object echoId, int perEchoBlockOps, int perEchoLookups) {
-		return budgets.computeIfAbsent(echoId, id -> new EchoBudget(Math.max(0, perEchoBlockOps), Math.max(0, perEchoLookups)));
+		EchoBudget b = budgets.get(echoId);
+		if (b == null) {
+			b = new EchoBudget();
+			budgets.put(echoId, b);
+		}
+		if (b.stamp != rotation) b.refill(Math.max(0, perEchoBlockOps), Math.max(0, perEchoLookups), rotation);
+		return b;
+	}
+
+	/** Forgets the budget object of an echo that is gone (optional; only saves memory). */
+	public void forget(Object echoId) {
+		budgets.remove(echoId);
 	}
 
 	/** Block ops granted this tick (hazard ops included). */
@@ -97,14 +127,20 @@ public final class BudgetScheduler {
 
 	/** One echo's allowance for the current tick. */
 	public final class EchoBudget {
-		private final int blockOps;
-		private final int lookups;
+		private int blockOps;
+		private int lookups;
 		private int blockOpsTaken;
 		private int lookupsTaken;
+		private long stamp = Long.MIN_VALUE;
 
-		private EchoBudget(int blockOps, int lookups) {
+		private EchoBudget() {}
+
+		private void refill(int blockOps, int lookups, long stamp) {
 			this.blockOps = blockOps;
 			this.lookups = lookups;
+			this.blockOpsTaken = 0;
+			this.lookupsTaken = 0;
+			this.stamp = stamp;
 		}
 
 		/** Takes one block op (per-echo and global); false -> action must wait. */

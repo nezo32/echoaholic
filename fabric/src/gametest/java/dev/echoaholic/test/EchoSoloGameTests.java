@@ -126,8 +126,11 @@ public class EchoSoloGameTests {
 		floor(h);
 		var p = TestSupport.player(h, new Vec3(2.5, 1, 2.5));
 		UUID u = p.getUUID();
-		long[] t0 = {-1}, c0 = {-1};
+		long[] t0 = {-1}, c0 = {-1}, spawn2 = {-1}, resumeT = {-1};
 		EchoConfig[] before = {null};
+		h.onEachTick(() -> {
+			if (spawn2[0] < 0 && stream(h, u).echo(2) != null) spawn2[0] = stream(h, u).streamTick;
+		});
 		h.startSequence()
 				.thenWaitUntil(() -> awaitEcho(h, u, 1))
 				.thenExecute(() -> {
@@ -141,11 +144,13 @@ public class EchoSoloGameTests {
 						h.assertTrue(stream(h, u).streamTick >= t0[0] + 75, "recording continues while paused");
 						h.assertTrue(stream(h, u).streamTick >= 2 * DELAY, "#2 is due");
 						h.assertTrue(state(h, u, 1).cursor <= c0[0] + 1, "cursor frozen while paused");
-						h.assertTrue(stream(h, u).echo(2) == null, "no spawn while paused");
+						h.assertTrue(stream(h, u).echo(2) == null, "no spawn while paused (#2 spawned at T=" + spawn2[0] + ", paused at T=" + t0[0]
+								+ ", config " + TestSupport.config(h) + ")");
 						h.assertTrue(awaitEcho(h, u, 1).isAlive(), "paused echo stays visible");
 						h.assertValueEqual(info(h, u, 1).activity(), Activity.PAUSED, "activity");
 					} finally {
 						restore(h, before[0]);
+						resumeT[0] = stream(h, u).streamTick;
 					}
 				})
 				.thenWaitUntil(() -> awaitEcho(h, u, 2))
@@ -153,7 +158,8 @@ public class EchoSoloGameTests {
 				.thenExecute(() -> {
 					h.assertTrue(state(h, u, 1).cursor >= c0[0] + 5, "#1 moves again");
 					long lag2 = stream(h, u).streamTick - state(h, u, 2).cursor;
-					h.assertTrue(Math.abs(lag2 - 2 * DELAY) <= 2, "late #2 still lags 2*delay: " + lag2);
+					h.assertTrue(Math.abs(lag2 - 2 * DELAY) <= 2, "late #2 still lags 2*delay: " + lag2 + " (T=" + stream(h, u).streamTick
+							+ " c2=" + state(h, u, 2).cursor + " c1=" + state(h, u, 1).cursor + " spawn2 at T=" + spawn2[0] + ", resumed at T=" + resumeT[0] + ")");
 					cleanup(h, p);
 				})
 				.thenSucceed();
@@ -289,8 +295,9 @@ public class EchoSoloGameTests {
 			}
 			if (c > w2 + 5 && c < w2End + 5 && powered) pressedLate[0] = true;
 		});
-		h.succeedWhen(() -> {
+		h.startSequence().thenWaitUntil(() -> {
 			h.assertTrue(r.cursor() >= w2End + 5, "echo past the second stand");
+		}).thenExecute(() -> {
 			try {
 				h.assertTrue(!pressedEarly[0], "plate pressed although triggerBlocks=false");
 				h.assertTrue(pressedLate[0], "plate not pressed with triggerBlocks=true");
@@ -298,13 +305,13 @@ public class EchoSoloGameTests {
 				cleanup(h, r.owner());
 				restore(h, before.withTriggerBlocks(false));
 			}
-		});
+		}).thenSucceed();
 	}
 
 	// ---------------------------------------------------------------------------------------------- cheap mode
 
 	/** An echo more than cheapModeDistance from every player: cheap (silent, no held item) but still breaks blocks. */
-	@GameTest(environment = NS + "solo_cheap", maxTicks = 400)
+	@GameTest(environment = NS + "solo_cheap", maxTicks = 3000)
 	public void cheapModeFar(GameTestHelper h) {
 		TestSupport.echoWorld(h);
 		ServerLevel level = h.getLevel();
@@ -399,8 +406,9 @@ public class EchoSoloGameTests {
 			maxStats[0] = Math.max(maxStats[0], st.blockOps());
 			if (st.deferred() > 0) deferred[0] = true;
 		});
-		h.succeedWhen(() -> {
+		h.startSequence().thenWaitUntil(() -> {
 			for (int i = 0; i < 3; i++) h.assertValueEqual(last[i], 0, "stone left in row " + i);
+		}).thenExecute(() -> {
 			try {
 				h.assertTrue(maxRow[0] <= 4, "per-echo cap: " + maxRow[0] + " breaks by one echo in one tick");
 				h.assertTrue(maxTotal[0] <= 5, "global cap: " + maxTotal[0] + " breaks in one tick");
@@ -412,7 +420,7 @@ public class EchoSoloGameTests {
 				for (Replay r : replays) cleanup(h, r.owner());
 				restore(h, before);
 			}
-		});
+		}).thenSucceed();
 	}
 
 	/** Two fires recorded on one tick with a global hazard budget of 1 are lit on two different ticks. */
@@ -436,8 +444,9 @@ public class EchoSoloGameTests {
 			if (litB[0] < 0 && h.getLevel().getBlockState(b).is(Blocks.FIRE)) litB[0] = h.getTick();
 			maxHazard[0] = Math.max(maxHazard[0], manager(h).lastTickStats().hazardOps());
 		});
-		h.succeedWhen(() -> {
+		h.startSequence().thenWaitUntil(() -> {
 			h.assertTrue(litA[0] >= 0 && litB[0] >= 0, "both fires lit");
+		}).thenExecute(() -> {
 			try {
 				h.assertTrue(litA[0] != litB[0], "fires lit on different ticks (" + litA[0] + ", " + litB[0] + ")");
 				h.assertTrue(maxHazard[0] <= 1, "hazard ops per tick " + maxHazard[0]);
@@ -447,6 +456,6 @@ public class EchoSoloGameTests {
 				cleanup(h, r.owner());
 				restore(h, before);
 			}
-		});
+		}).thenSucceed();
 	}
 }

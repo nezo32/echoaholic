@@ -214,50 +214,76 @@ public class EchoReplayGameTests {
 	// ---------------------------------------------------------------------------------------------- movement
 
 	/** The echo walks the recorded path: every tick within 1 block (horizontal) of the recorded position. */
-	@GameTest(structure = ARENA, maxTicks = 500)
+	@GameTest(structure = ARENA, maxTicks = 600)
 	public void echoFollowsPath(GameTestHelper h) {
 		echoWorld(h);
 		floor(h);
 		Stream s = new Stream(Level.OVERWORLD, at(h, 2, 2)).idle(5)
 				.walkTo(at(h, 29, 2), 0.2)
-				.walkTo(at(h, 29, 29), 0.2)
-				.idle(5);
+				.walkTo(at(h, 29, 29), 0.2);
+		long end = s.now();
+		s.idle(300); // the echo must never run into the owner's live stream during the test
 		List<Vec3> path = s.positions();
 		Replay r = SyntheticStreams.replay(h, s, new Vec3(16, 11, 16));
 		double[] worst = {0};
 		long[] worstTick = {-1};
-		long[] lagStart = {-1};
-		StringBuilder trace = new StringBuilder();
-		long[] lastLag = {-1};
 		h.onEachTick(() -> {
 			EchoEntity e = manager(h).entity(r.owner(), 1);
 			long c = r.cursor();
-			long lagNow = stream(h, r.owner()).streamTick - c;
-			if (trace.length() < 20000 && lagNow != lastLag[0]) {
-				lastLag[0] = lagNow;
-				trace.append("\n t=").append(h.getTick()).append(" c=").append(c)
-						.append(" T=").append(stream(h, r.owner()).streamTick)
-						.append(" e=").append(e == null ? "null" : h.relativeVec(e.position()))
-						.append(" tgt=").append(c < path.size() ? h.relativeVec(path.get((int) c)) : "-")
-						.append(" act=").append(manager(h).list(r.owner()).isEmpty() ? "-" : manager(h).list(r.owner()).get(0).activity())
-						.append(" streaming=").append(TestSupport.es(h).recorder().isStreaming(r.owner()));
-			}
-			if (e == null || c <= 0 || c >= path.size()) return;
-			if (lagStart[0] < 0) lagStart[0] = stream(h, r.owner()).streamTick - c;
+			if (e == null || c <= 0 || c > end) return;
 			double d = horizontal(e.position(), path.get((int) c));
 			if (d > worst[0]) {
 				worst[0] = d;
 				worstTick[0] = c;
 			}
 		});
-		h.succeedWhen(() -> {
-			h.assertTrue(r.cursor() >= path.size() - 1, "echo at the end of the path (cursor " + r.cursor() + ")");
-			h.assertTrue(worst[0] <= 1.0, "max horizontal deviation " + worst[0] + " at stream tick " + worstTick[0]);
-			long lagGrowth = stream(h, r.owner()).streamTick - r.cursor() - lagStart[0];
-			if (lagGrowth > 5) System.out.println("ECHO_TRACE echoFollowsPath" + trace);
-			h.assertTrue(lagGrowth <= 5, "free path must not stall; lag grew by " + lagGrowth);
-			cleanup(h, r.owner());
+		h.startSequence()
+				.thenWaitUntil(() -> h.assertTrue(r.cursor() > end, "echo at the end of the path (cursor " + r.cursor() + ")"))
+				.thenExecute(() -> {
+					h.assertTrue(worst[0] <= 1.0, "max horizontal deviation " + worst[0] + " at stream tick " + worstTick[0]);
+					EchoEntity e = awaitEcho(h, r.owner(), 1);
+					h.assertTrue(horizontal(e.position(), path.get((int) end)) <= 1.0, "echo at the path's end: " + h.relativeVec(e.position()));
+					cleanup(h, r.owner());
+				})
+				.thenSucceed();
+	}
+
+	/**
+	 * Lag stays exactly k * delay on a free walk across many segment boundaries (20-tick test segments): loading the
+	 * next segment must never stall the echo.
+	 */
+	@GameTest(structure = ARENA, maxTicks = 1000)
+	public void segmentSwitchKeepsLag(GameTestHelper h) {
+		echoWorld(h);
+		floor(h);
+		Stream s = new Stream(Level.OVERWORLD, at(h, 2, 5)).idle(5);
+		for (int i = 0; i < 3; i++) s.walkTo(at(h, 28, 5), 0.25).walkTo(at(h, 2, 5), 0.25);
+		long end = s.now();
+		s.idle(300);
+		Replay r = SyntheticStreams.replay(h, s, new Vec3(16, 11, 16));
+		long[] lag0 = {-1}, maxLag = {-1};
+		StringBuilder stalls = new StringBuilder();
+		h.onEachTick(() -> {
+			long c = r.cursor();
+			if (manager(h).entity(r.owner(), 1) == null || c <= 1 || c > end) return;
+			long lag = stream(h, r.owner()).streamTick - c;
+			if (lag0[0] < 0) lag0[0] = lag;
+			if (lag > maxLag[0]) {
+				if (maxLag[0] >= 0 && stalls.length() < 400) stalls.append(" c=").append(c).append("->lag ").append(lag);
+				maxLag[0] = lag;
+			}
 		});
+		h.startSequence()
+				.thenWaitUntil(() -> h.assertTrue(r.cursor() > end, "echo at the end of the walk (cursor " + r.cursor() + ")"))
+				.thenExecute(() -> {
+					try {
+						h.assertTrue(maxLag[0] - lag0[0] <= 1, "lag drifted by " + (maxLag[0] - lag0[0]) + " over " + end / TestSupport.SEGMENT
+								+ " segment switches; stalls at" + stalls);
+					} finally {
+						cleanup(h, r.owner());
+					}
+				})
+				.thenSucceed();
 	}
 
 	/** A wall across the path: the echo waits (lag grows, activity WAITING); remove it and the echo goes on. */
@@ -307,20 +333,24 @@ public class EchoReplayGameTests {
 		Vec3 b = at(h, 26, 26);
 		Stream s = new Stream(Level.OVERWORLD, a).idle(10);
 		long tJump = s.now();
-		s.teleport(b).idle(20);
+		s.teleport(b).idle(300);
 		Replay r = SyntheticStreams.replay(h, s, new Vec3(16, 11, 16));
 		double[] worstMiddle = {0};
+		StringBuilder trace = new StringBuilder();
 		h.onEachTick(() -> {
 			EchoEntity e = manager(h).entity(r.owner(), 1);
 			if (e == null) return;
 			double d = Math.min(horizontal(e.position(), a), horizontal(e.position(), b));
+			if (d > 2.0 && trace.length() < 1500) {
+				trace.append(" [c=").append(r.cursor()).append(" pos=").append(h.relativeVec(e.position())).append(']');
+			}
 			worstMiddle[0] = Math.max(worstMiddle[0], d);
 		});
 		h.succeedWhen(() -> {
 			h.assertTrue(r.cursor() > tJump + 10, "echo past the jump");
 			EchoEntity e = awaitEcho(h, r.owner(), 1);
 			h.assertTrue(horizontal(e.position(), b) <= 1.0, "echo at the teleport target: " + e.position());
-			h.assertTrue(worstMiddle[0] <= 2.0, "echo walked instead of jumping (" + worstMiddle[0] + " blocks off both ends)");
+			h.assertTrue(worstMiddle[0] <= 2.0, "echo walked instead of jumping (" + worstMiddle[0] + " blocks off both ends; jump at c=" + tJump + "):" + trace);
 			cleanup(h, r.owner());
 		});
 	}

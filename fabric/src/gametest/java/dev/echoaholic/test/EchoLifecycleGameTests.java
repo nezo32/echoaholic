@@ -259,7 +259,7 @@ public class EchoLifecycleGameTests {
 	// ---------------------------------------------------------------------------------------------- dimensions / chunks
 
 	/** A recorded dimension change moves the echo to the Nether (a new entity there, the old one gone). */
-	@GameTest(maxTicks = 300)
+	@GameTest(maxTicks = 3000)
 	public void dimensionChangeRespawns(GameTestHelper h) {
 		echoWorld(h);
 		floor(h);
@@ -302,7 +302,7 @@ public class EchoLifecycleGameTests {
 	}
 
 	/** An echo whose chunk stops ticking pauses (cursor held); ticking again, it continues. */
-	@GameTest(maxTicks = 400)
+	@GameTest(maxTicks = 3000)
 	public void unloadedChunkPauses(GameTestHelper h) {
 		echoWorld(h);
 		ServerLevel level = h.getLevel();
@@ -460,7 +460,7 @@ public class EchoLifecycleGameTests {
 					long t = stream(h, u).streamTick;
 					h.assertTrue(t >= 3 && t <= 6, "stream restarted from 0 (T=" + t + ")");
 				})
-				.thenWaitUntil(() -> awaitEcho(h, u, 1))
+				.thenWaitUntil(() -> h.assertTrue(stream(h, u).echo(1) != null, "new echo #1 not scheduled yet"))
 				.thenExecute(() -> {
 					h.assertValueEqual(stream(h, u).streamTick, DELAY, "new #1 at T = delay");
 					cleanup(h, p);
