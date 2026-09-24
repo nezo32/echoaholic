@@ -72,6 +72,8 @@ public final class EchoManager implements EchoListener {
 	private final float[] trailScratch = new float[MovementRules.TRAIL_POINTS * 3];
 
 	private final List<EchoRuntime> orderScratch = new ArrayList<>();
+	/** Owner -> echo number whose first segment was already prefetched. */
+	private final Map<UUID, Integer> spawnPrefetched = new HashMap<>();
 	private final double[] targetScratch = new double[5];
 	private final double[] nextScratch = new double[5];
 	private final double[] trailPoint = new double[5];
@@ -102,6 +104,7 @@ public final class EchoManager implements EchoListener {
 	public TickStats tickOnce() {
 		long start = System.nanoTime();
 		tickSeq++;
+		store.beginTick();
 		cfg = data.config();
 		now = server.getTickCount();
 		if (!cfg.enabled()) {
@@ -156,7 +159,9 @@ public final class EchoManager implements EchoListener {
 			long t = stream.streamTick;
 			RingBuffer ring = store.ring(owner);
 			long oldest = ring.oldestRetainedTick();
-			boolean needed = t >= (long) stream.nextEchoIndex * delay || stream.echoes.size() > cap;
+			long dueTick = (long) stream.nextEchoIndex * delay;
+			if (t < dueTick && t >= dueTick - MovementRules.PREFETCH_TICKS) prefetchSpawn(stream, ring, dueTick, retention);
+			boolean needed = t >= dueTick || stream.echoes.size() > cap;
 			if (!needed) {
 				for (int j = 0, m = stream.echoes.size(); j < m; j++) {
 					if (stream.echoes.get(j).cursor < oldest) {
@@ -186,6 +191,19 @@ public final class EchoManager implements EchoListener {
 				Feedback.joined(player, plan.newIndex());
 			}
 		}
+	}
+
+	/**
+	 * The next echo is about to be due: start loading the segment its cursor will start in (EchoSchedule's rule at the
+	 * due tick: max(0, oldest, due - retention, due - k * delay)), once per echo number.
+	 */
+	private void prefetchSpawn(PlayerStream stream, RingBuffer ring, long dueTick, long retention) {
+		Integer done = spawnPrefetched.get(stream.owner);
+		if (done != null && done == stream.nextEchoIndex) return;
+		spawnPrefetched.put(stream.owner, stream.nextEchoIndex);
+		long cursor = Math.max(Math.max(0L, ring.oldestRetainedTick()), dueTick - retention);
+		SegmentMeta meta = ring.segmentAtOrAfter(cursor).orElse(null);
+		if (meta != null && store.cached(stream.owner, meta.seq()) == null) store.load(stream.owner, meta.seq());
 	}
 
 	/** One echo, one tick. Returns FROZEN / STALLED / ADVANCED / GONE. */
@@ -534,10 +552,15 @@ public final class EchoManager implements EchoListener {
 				rt.pendingSeq = meta.seq();
 			}
 			CompletableFuture<DecodedSegment> f = rt.pending;
-			if (!f.isDone()) return null;
+			if (!f.isDone()) {
+				// bytes already in memory (just sealed / read): decode now, within the store's per-tick budget
+				decoded = store.decodeNowIfResident(rt.owner, meta.seq());
+				if (decoded == null) return null;
+			} else if (!f.isCompletedExceptionally() && !f.isCancelled()) {
+				decoded = f.join();
+			}
 			rt.pending = null;
 			rt.pendingSeq = -1;
-			if (!f.isCompletedExceptionally() && !f.isCancelled()) decoded = f.join();
 			if (decoded == null || !decoded.contains(st.cursor)) {
 				// unreadable segment: treat as a gap
 				jumpCursor(rt, meta.endTick());
@@ -814,9 +837,18 @@ public final class EchoManager implements EchoListener {
 		EchoRuntime rt = new EchoRuntime(owner, stream, state);
 		rt.burstPending = burst;
 		rt.bornSeq = tickSeq;
+		prefetchCurrent(rt);
 		runtimes.put(state.echoId, rt);
 		runtimeList.add(rt);
 		return rt;
+	}
+
+	/** Starts loading the segment holding the runtime's cursor (new, restored or respawned runtimes). */
+	private void prefetchCurrent(EchoRuntime rt) {
+		SegmentMeta meta = store.ring(rt.owner).segmentAtOrAfter(rt.state.cursor).orElse(null);
+		if (meta == null || store.cached(rt.owner, meta.seq()) != null) return;
+		rt.pending = store.load(rt.owner, meta.seq());
+		rt.pendingSeq = meta.seq();
 	}
 
 	/** Removes an echo for good (state + runtime + entity). {@code fadedTo} non-null = cap retirement notice. */
@@ -944,6 +976,7 @@ public final class EchoManager implements EchoListener {
 			}
 		}
 		stream.echoes.clear();
+		spawnPrefetched.remove(owner);
 		data.setDirty();
 		return count;
 	}
@@ -952,6 +985,10 @@ public final class EchoManager implements EchoListener {
 	public void onModeChanged(boolean enabled) {
 		if (enabled) {
 			reconcile();
+			for (int i = 0, n = runtimeList.size(); i < n; i++) {
+				EchoRuntime rt = runtimeList.get(i);
+				if (rt.segment == null && rt.pending == null) prefetchCurrent(rt);
+			}
 			return;
 		}
 		despawnAll();
