@@ -215,8 +215,8 @@ Echoaholic keeps everything in the world folder, not in player data:
 
 Echoes are never saved in chunks: they are rebuilt from `world.dat` when the world loads. Files are written on a
 background thread, and segments older than `bufferHours` are deleted. `/echoaholic clear` deletes that player's
-files and saves `world.dat` right away. If `world.dat` can't be read (for example a damaged file), a copy is kept as
-`world.dat.damaged-<ms>`, the mode stays off for that session and the file is not overwritten with defaults.
+files and saves `world.dat` right away. If `world.dat` can't be read (for example a damaged file), the damaged file is backed up to
+`world.dat.damaged-<ms>`; defaults (off) will be saved; restore the backup to recover.
 
 Measured size (the core `SegmentSizeTest`, a synthetic worst case): about **389 KiB per hour** of dense play (walking or sprinting every tick,
 a block broken every half second, a block placed every 2 seconds, a hit every 5 seconds, a shot every 30 seconds),

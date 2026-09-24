@@ -343,7 +343,10 @@ public class EchoSoloGameTests {
 		s.tick(SyntheticStreams.breakOf(b2, "minecraft:stone", "minecraft:iron_pickaxe")).idle(200);
 		Replay r = SyntheticStreams.replay(h, s, new Vec3(3.5, 45, 3.5));
 		h.startSequence()
-				.thenWaitUntil(() -> h.assertTrue(r.cursor() > tBreak2 + 2, "echo past the breaks"))
+				.thenWaitUntil(() -> h.assertTrue(r.cursor() > tBreak2 + 2, "echo past the breaks (cursor " + r.cursor()
+						+ ", T " + stream(h, r.owner()).streamTick + ", streaming " + es(h).recorder().isStreaming(r.owner())
+						+ ", entity " + (manager(h).entity(r.owner(), 1) != null) + ", list " + manager(h).list(r.owner())
+						+ ", last stats " + manager(h).lastTickStats() + ")"))
 				.thenExecute(() -> {
 					try {
 						EchoEntity e = awaitEcho(h, r.owner(), 1);

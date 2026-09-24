@@ -84,18 +84,55 @@ class StreamStoreTest {
 	}
 
 	@Test
-	void synchronousDecodesAreBudgetedPerTick() throws Exception {
+	void synchronousDecodesAreBudgetedPerOwnerPerTick() {
 		for (int i = 0; i < 4; i++) store.append(OWNER, sealed(i, i * 20L, 20));
 		store.beginTick();
 		assertNotNull(store.decodeNowIfResident(OWNER, 0));
-		assertNotNull(store.decodeNowIfResident(OWNER, 1));
-		assertNull(store.decodeNowIfResident(OWNER, 2)); // budget of SYNC_DECODES_PER_TICK used up
+		assertNull(store.decodeNowIfResident(OWNER, 1)); // this owner's one decode for the tick is used
 		assertNotNull(store.decodeNowIfResident(OWNER, 0)); // cache hits cost nothing
-		assertNotNull(store.cached(OWNER, 1));
 		store.beginTick();
-		assertNotNull(store.decodeNowIfResident(OWNER, 2));
-		assertNotNull(store.decodeNowIfResident(OWNER, 3));
-		assertEquals(2, StreamStore.SYNC_DECODES_PER_TICK);
+		assertNotNull(store.decodeNowIfResident(OWNER, 1));
+		assertEquals(1, StreamStore.SYNC_DECODES_PER_OWNER_PER_TICK);
+	}
+
+	@Test
+	void ownersDoNotStarveEachOtherUpToTheGlobalCap() {
+		int owners = StreamStore.MAX_SYNC_DECODES_PER_TICK + 2;
+		UUID[] ids = new UUID[owners];
+		for (int o = 0; o < owners; o++) {
+			ids[o] = new UUID(7, o);
+			store.append(ids[o], sealed(0, 0, 20)); // everybody sealed a segment on the same tick
+		}
+		store.beginTick();
+		for (int o = 0; o < StreamStore.MAX_SYNC_DECODES_PER_TICK; o++) assertNotNull(store.decodeNowIfResident(ids[o], 0), "owner " + o);
+		assertNull(store.decodeNowIfResident(ids[owners - 1], 0)); // global safety cap
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(ids[owners - 1], 0));
+	}
+
+	@Test
+	void forgetResidentReleasesWrittenBytesOnly() throws Exception {
+		for (int i = 0; i < 3; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true); // all written
+		store.forgetResident(OWNER);
+		store.beginTick();
+		assertNull(store.decodeNowIfResident(OWNER, 2)); // no longer in memory
+		assertEquals(40, await(store.load(OWNER, 2)).startTick()); // still on disk
+
+		// a segment appended and forgotten at once: its write may still be queued, so its bytes may stay until then
+		store.append(OWNER, sealed(3, 60, 20));
+		store.forgetResident(OWNER);
+		store.flush(true); // write done -> the IO thread released the bytes itself
+		assertTrue(Files.exists(SegmentFiles.segmentPath(dir(), 3)));
+		store.beginTick();
+		assertNull(store.decodeNowIfResident(OWNER, 3));
+		assertEquals(60, await(store.load(OWNER, 3)).startTick()); // nothing lost
+
+		// the next append keeps recent bytes again
+		store.append(OWNER, sealed(4, 80, 20));
+		store.flush(true);
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(OWNER, 4));
 	}
 
 	@Test

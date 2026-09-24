@@ -176,6 +176,12 @@ public final class SyntheticStreams {
 			end = Math.max(end, s.endTick());
 			nextSeq = Math.max(nextSeq, s.seq() + 1);
 		}
+		// Warm the decoded-segment cache now (blocking): the gametest server sprints, so an echo waiting for a disk read
+		// queued behind other tests' IO would burn hundreds of ticks of a test's tick budget in a fraction of a second.
+		for (SealedSegment s : segments) {
+			es.store().load(owner, s.seq()).join();
+			es.store().cached(owner, s.seq());
+		}
 		PlayerStream ps = es.data().player(owner);
 		ps.streamTick = Math.max(ps.streamTick, end);
 		ps.nextSeq = Math.max(ps.nextSeq, nextSeq);

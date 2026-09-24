@@ -51,6 +51,7 @@ public final class EchoRuntime {
 	boolean steering;
 	double steerX, steerY, steerZ;
 	boolean steerFree;
+	float steerYRot, steerXRot;
 	/** The cursor jumped (gap, failed load): a far target is reached by teleport instead of walking. */
 	boolean resync;
 

@@ -116,6 +116,14 @@ public class EchoEntity extends Mannequin {
 		setXRot(xRot);
 	}
 
+	/** Turns body, head and pitch without changing the steering target (the echo looks where the recording looked). */
+	public void look(float yRot, float xRot) {
+		setYRot(yRot);
+		setYHeadRot(yRot);
+		setYBodyRot(yRot);
+		setXRot(xRot);
+	}
+
 	/** True when the last movement tick hit a wall and made (almost) no progress toward the target. */
 	public boolean steerBlocked() {
 		return steerBlocked;

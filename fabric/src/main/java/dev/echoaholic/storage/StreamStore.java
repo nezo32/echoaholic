@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,8 +46,9 @@ import org.jspecify.annotations.Nullable;
  * {@link #load} of them has been decoded into the LRU cache (or they are evicted, wiped, or pushed out by newer
  * segments). {@link #load} decodes such bytes on the IO thread (no disk read, no decode on the server thread: all
  * echoes of a player cross a segment boundary on the same tick); the replay loop's prefetch calls it ahead of time.
- * An echo that needs a segment at once may use {@link #decodeNowIfResident}, capped at {@value #SYNC_DECODES_PER_TICK}
- * server-thread decodes per tick ({@link #beginTick()}).
+ * An echo that needs a segment at once may use {@link #decodeNowIfResident}: at most one server-thread decode per player
+ * and {@value #MAX_SYNC_DECODES_PER_TICK} in total per tick ({@link #beginTick()}). {@link #forgetResident} releases a
+ * player's in-memory bytes (on logout) as soon as they are on disk.
  *
  * <p><b>Failures</b> never reach the game: a failed write drops the pending bytes (a later load of that segment fails,
  * and the replay loop skips the gap), a failed read fails the future, and each player's first problem is logged as a
@@ -64,8 +66,10 @@ public final class StreamStore implements AutoCloseable {
 	private static final int LOADING_SWEEP_THRESHOLD = 64;
 	/** Newest segments per player whose bytes stay in memory until their first load. */
 	public static final int RECENT_PER_OWNER = 4;
-	/** Most {@link #decodeNowIfResident} decodes per server tick (see {@link #beginTick()}). */
-	public static final int SYNC_DECODES_PER_TICK = 2;
+	/** {@link #decodeNowIfResident} decodes per player per server tick (see {@link #beginTick()}). */
+	public static final int SYNC_DECODES_PER_OWNER_PER_TICK = 1;
+	/** Safety cap on {@link #decodeNowIfResident} decodes of all players together per server tick. */
+	public static final int MAX_SYNC_DECODES_PER_TICK = 16;
 
 	private record Key(UUID owner, long seq) {}
 
@@ -88,6 +92,10 @@ public final class StreamStore implements AutoCloseable {
 	 * the server thread; the IO thread only removes an entry whose write failed.
 	 */
 	private final Map<Key, byte[]> pending = new ConcurrentHashMap<>();
+	/** Segments whose write is queued but not finished. Added by the server thread, removed by the IO thread. */
+	private final Set<Key> unwritten = ConcurrentHashMap.newKeySet();
+	/** Owners whose in-memory bytes go away once written ({@link #forgetResident}); cleared by their next append. */
+	private final Set<UUID> forgotten = ConcurrentHashMap.newKeySet();
 	/** Server thread: seqs appended per player, newest last, at most {@link #RECENT_PER_OWNER}. */
 	private final Map<UUID, ArrayDeque<Long>> recent = new HashMap<>();
 	/** Shared with the IO thread: the next index content to write per owner. */
@@ -98,7 +106,8 @@ public final class StreamStore implements AutoCloseable {
 	private final Set<UUID> warned = ConcurrentHashMap.newKeySet();
 	private static final UUID STORE_KEY = new UUID(0L, 0L);
 	private boolean closed;
-	private int syncDecodesLeft = SYNC_DECODES_PER_TICK;
+	/** Server thread: owners that used their synchronous decode this tick. */
+	private final Set<UUID> syncDecodedOwners = new HashSet<>();
 
 	/** A store over {@code streamsDir} ({@code <world>/data/echoaholic/streams}); nothing is read until needed. */
 	public StreamStore(Path streamsDir) {
@@ -173,21 +182,30 @@ public final class StreamStore implements AutoCloseable {
 		}
 		Key key = new Key(owner, s.seq());
 		byte[] bytes = s.bytes();
+		forgotten.remove(owner);
 		pending.put(key, bytes);
 		ArrayDeque<Long> seqs = recent.computeIfAbsent(owner, o -> new ArrayDeque<>());
 		seqs.addLast(s.seq());
 		// an older segment leaving memory is either on disk or queued for writing before any read of it (FIFO)
 		while (seqs.size() > RECENT_PER_OWNER) pending.remove(new Key(owner, seqs.removeFirst()));
 		Path file = SegmentFiles.segmentPath(SegmentFiles.ownerDir(streamsDir, owner), s.seq());
+		unwritten.add(key);
 		boolean queued = submit(owner, () -> {
 			try {
 				SegmentFiles.writeAtomic(file, bytes);
 			} catch (IOException | RuntimeException e) {
 				pending.remove(key, bytes); // dropped: a later load fails and the segment is a gap
 				throw e;
+			} finally {
+				unwritten.remove(key);
+				// order matters against forgetResident: it marks the owner first, then drops written entries
+				if (forgotten.contains(owner)) pending.remove(key, bytes);
 			}
 		});
-		if (!queued) pending.remove(key, bytes);
+		if (!queued) {
+			unwritten.remove(key);
+			pending.remove(key, bytes);
+		}
 		scheduleIndexWrite(owner, ring);
 	}
 
@@ -265,14 +283,32 @@ public final class StreamStore implements AutoCloseable {
 
 	/** Starts a server tick: refills the {@link #decodeNowIfResident} budget. Call once per tick before the replay loop. */
 	public void beginTick() {
-		syncDecodesLeft = SYNC_DECODES_PER_TICK;
+		syncDecodedOwners.clear();
+	}
+
+	/**
+	 * Releases the player's in-memory segment bytes (call when the owner leaves: their stream does not grow while
+	 * offline). Bytes already on disk go now; bytes whose write is still queued stay until the IO thread has written
+	 * them and are released right after. Nothing recorded is lost: later loads read the files. Decoded segments in the
+	 * LRU cache are unaffected. The next {@link #append} for the player keeps recent bytes again.
+	 */
+	public void forgetResident(UUID owner) {
+		forgotten.add(owner); // before the scan: a write finishing concurrently then releases its own bytes
+		pending.keySet().removeIf(k -> k.owner.equals(owner) && !unwritten.contains(k));
+		ArrayDeque<Long> seqs = recent.get(owner);
+		if (seqs != null) {
+			seqs.removeIf(seq -> !pending.containsKey(new Key(owner, seq)));
+			if (seqs.isEmpty()) recent.remove(owner);
+		}
 	}
 
 	/**
 	 * Bounded synchronous path for an echo that needs a segment right now (just spawned, restored): the decoded segment
 	 * if it is cached, or, when its bytes are still in memory (one of the player's recent segments) and this tick's
-	 * budget of {@value #SYNC_DECODES_PER_TICK} decodes is not used up, decoded here on the server thread and cached.
-	 * Otherwise null (use {@link #load}); never reads the disk. A decode failure fails the segment like {@link #load}.
+	 * budget allows it, decoded here on the server thread and cached. Budget per tick ({@link #beginTick()}): one decode
+	 * per player (all echoes of a player share the cached result, so the echo that needs a just-sealed segment is
+	 * never starved by other players) and {@value #MAX_SYNC_DECODES_PER_TICK} in total. Cache hits are free. Otherwise
+	 * null (use {@link #load}); never reads the disk. A decode failure fails the segment like {@link #load}.
 	 */
 	public @Nullable DecodedSegment decodeNowIfResident(UUID owner, long seq) {
 		DecodedSegment hit = cached(owner, seq);
@@ -280,8 +316,8 @@ public final class StreamStore implements AutoCloseable {
 		Key key = new Key(owner, seq);
 		if (loading.containsKey(key) && loading.get(key).isCompletedExceptionally()) return null;
 		byte[] bytes = pending.get(key);
-		if (bytes == null || syncDecodesLeft <= 0) return null;
-		syncDecodesLeft--;
+		if (bytes == null || syncDecodedOwners.size() >= MAX_SYNC_DECODES_PER_TICK) return null;
+		if (!syncDecodedOwners.add(owner)) return null; // this player's decode for the tick is used
 		try {
 			DecodedSegment decoded = SegmentReader.decode(bytes);
 			loading.remove(key); // a running IO decode of the same bytes is simply superseded
@@ -309,6 +345,7 @@ public final class StreamStore implements AutoCloseable {
 		loading.keySet().removeIf(k -> k.owner.equals(owner));
 		pending.keySet().removeIf(k -> k.owner.equals(owner));
 		recent.remove(owner);
+		forgotten.remove(owner);
 		Path dir = SegmentFiles.ownerDir(streamsDir, owner);
 		submit(owner, () -> SegmentFiles.deleteOwnerDir(dir));
 	}

@@ -52,21 +52,21 @@ public final class EchoBootstrap {
 		}
 		Path file = server.getWorldPath(LevelResource.DATA).resolve("echoaholic").resolve("world.dat");
 		if (Files.exists(file)) {
-			// 3a. the file is there but vanilla could not read it (it logged the error and cached "absent"). Do NOT
-			//     persist DEFAULT over it: keep the in-memory defaults (mode OFF) without setDirty/scheduleSave, so the
-			//     damaged file stays for inspection or repair. A later save that marks the data dirty (a command, the
-			//     save hook) would replace it, so a backup copy is kept next to it as well.
+			// 3a. the file is there but vanilla could not read it (it logged the error and cached "absent"). The
+			//     EchoWorldData.get() above already registered fresh data through computeIfAbsent, which marks it dirty,
+			//     so the defaults (OFF) replace the file at the next save. Keep a backup copy first, so the old
+			//     settings and echo states can be recovered by restoring it (with the world closed).
 			Path backup = file.resolveSibling("world.dat.damaged-" + System.currentTimeMillis());
 			try {
 				Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+				Echoaholic.LOGGER.error("Unreadable Echoaholic world data {}; the damaged file was backed up to {}; defaults (OFF)"
+						+ " will be saved; restore the backup to recover", file, backup.getFileName());
 			} catch (IOException | RuntimeException e) {
-				backup = null;
+				Echoaholic.LOGGER.error("Unreadable Echoaholic world data {}, and it could not be backed up; defaults (OFF) will be saved",
+						file, e);
 			}
-			Echoaholic.LOGGER.error("Unreadable Echoaholic world data {}; Echoaholic Mode stays OFF for this session and the file is not"
-					+ " overwritten now{}", file, backup != null ? " (backup: " + backup.getFileName() + ")" : "");
-			return;
 		}
-		// 3b. no data yet: OFF, written once so this runs once per world
+		// 3b. no (readable) data: OFF, written once so this runs once per world
 		set(server, data, EchoConfig.DEFAULT);
 		server.getDataStorage().scheduleSave();
 	}

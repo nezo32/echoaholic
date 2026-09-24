@@ -241,7 +241,7 @@ public final class EchoManager implements EchoListener {
 			if (rt.removed) return GONE;
 			if (seg != null) {
 				TickEntry entry = entryAt(rt, seg, st.cursor);
-				if (hasJump(entry, st.actionsDone)) {
+				if (hasJump(rt, entry, st.actionsDone)) {
 					int r = runLeadingMeta(rt, entry, b);
 					if (r != ADVANCED) return r;
 					e = rt.entity;
@@ -380,7 +380,7 @@ public final class EchoManager implements EchoListener {
 		if (st.collapseTicks > 0) {
 			stopSteer(rt, e);
 		} else if (!rt.cheap && nextSeg != null && nextSeg.contains(st.cursor)
-				&& !hasJump(entryAt(rt, nextSeg, st.cursor), 0)) {
+				&& !hasJump(rt, entryAt(rt, nextSeg, st.cursor), 0)) {
 			double[] nxt = nextScratch;
 			if (nextSeg.positionAt(st.cursor, nxt)) {
 				if (MovementRules.isJump(e.distanceToSqr(nxt[0], nxt[1], nxt[2]))) {
@@ -435,13 +435,25 @@ public final class EchoManager implements EchoListener {
 		return ADVANCED;
 	}
 
-	/** True iff {@code entry} still has a Teleport or Dimension action at or after {@code from}. */
-	private static boolean hasJump(@Nullable TickEntry entry, int from) {
+	/**
+	 * True iff {@code entry} still has a real jump at or after {@code from}: a Teleport, or a Dimension action into
+	 * another level or farther than {@link MovementRules#TELEPORT_DISTANCE}. The segment-start keyframe (D8) in the
+	 * echo's own level nearby is not a jump.
+	 */
+	private static boolean hasJump(EchoRuntime rt, @Nullable TickEntry entry, int from) {
 		if (entry == null) return false;
 		List<Action> actions = entry.actions();
 		for (int i = from, n = actions.size(); i < n; i++) {
 			Action a = actions.get(i);
-			if (a instanceof Dimension || a instanceof Teleport) return true;
+			if (a instanceof Teleport) return true;
+			if (a instanceof Dimension d) {
+				EchoState st = rt.state;
+				if (!d.dimensionId().equals(st.dimension)) return true;
+				EchoEntity e = rt.entity;
+				double x = e != null ? e.getX() : st.x, y = e != null ? e.getY() : st.y, z = e != null ? e.getZ() : st.z;
+				double dx = d.x() - x, dy = d.y() - y, dz = d.z() - z;
+				if (MovementRules.isJump(dx * dx + dy * dy + dz * dz)) return true;
+			}
 		}
 		return false;
 	}
@@ -467,13 +479,24 @@ public final class EchoManager implements EchoListener {
 	/** Steers toward {@code p} = x, y, z, yRot, xRot; skips the call (and its Vec3) when nothing changed. */
 	private void steer(EchoRuntime rt, EchoEntity e, double[] p) {
 		boolean freeFlight = rt.pose.fallFlying() || rt.pose.swimming();
-		if (rt.steering && rt.steerX == p[0] && rt.steerY == p[1] && rt.steerZ == p[2] && rt.steerFree == freeFlight) return;
+		if (rt.steering && rt.steerX == p[0] && rt.steerY == p[1] && rt.steerZ == p[2] && rt.steerFree == freeFlight) {
+			// same target: only turn (mining / fighting in place still faces the recorded direction)
+			float yRot = (float) p[3], xRot = (float) p[4];
+			if (yRot != rt.steerYRot || xRot != rt.steerXRot) {
+				e.look(yRot, xRot);
+				rt.steerYRot = yRot;
+				rt.steerXRot = xRot;
+			}
+			return;
+		}
 		e.steer(new Vec3(p[0], p[1], p[2]), (float) p[3], (float) p[4], freeFlight);
 		rt.steering = true;
 		rt.steerX = p[0];
 		rt.steerY = p[1];
 		rt.steerZ = p[2];
 		rt.steerFree = freeFlight;
+		rt.steerYRot = (float) p[3];
+		rt.steerXRot = (float) p[4];
 	}
 
 	/** Stands still (keeps the current rotation). */
@@ -1008,6 +1031,7 @@ public final class EchoManager implements EchoListener {
 				rt.activity = Activity.PAUSED;
 			}
 		}
+		store.forgetResident(owner); // their in-memory segment bytes are not needed while they are away
 	}
 
 	/** Copies entity position / rotation / health / dimension into the persisted states. */
