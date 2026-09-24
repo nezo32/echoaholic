@@ -19,18 +19,22 @@ When the mode is on, the mod does the following for each player:
 1. **Recording:** while you play in Survival or Adventure, the mod records your movement (walking, sneaking, sprinting,
    swimming, elytra), blocks you break and place, melee hits, projectiles you fire, buckets, flint and steel and fire
    charges, shears, bone meal, TNT, dimension changes, teleports, respawns and deaths. Chat, your inventory, menus and
-   eating are never recorded. Creative, Spectator and logging off pause the recording, and so does turning the mode
-   off.
+   eating are never recorded, and neither are fake players (machines from other mods that act under a player's
+   name). Bone meal is only recorded when it was used on something it works on. Creative, Spectator and logging off
+   pause the recording, and so does turning the mode off.
 2. **A new echo:** after every **Echo Delay** (default 5 minutes) of recorded play, a new echo joins. Echo #k joins
-   when you have k × delay of recorded play, and it starts at the beginning of your history, so it is k × delay behind
-   you. Echo numbers keep going up and are never reused.
+   when you have k × delay of recorded play, and it starts at the beginning of your history, so it is exactly
+   k × delay behind you. Echo numbers keep going up and are never reused.
 3. **Replay, for real:** each echo walks your path and repeats what you did at the moment you did it:
    - **Breaking:** only if the block is still the one you broke. The drops fall on the ground as if the block was mined
-     with your tool without its enchantments. For each dropped item the echo gets one credit of that item.
+     with your tool without its enchantments. For each dropped item the echo gets one credit of that item (no drops
+     and no credits while the `doTileDrops` game rule is off).
    - **Placing:** only if the spot is free **and** the echo has a credit for that item, which the placement uses up.
-     Without one, the placement is skipped. TNT is free by default (`freeTnt`).
+     Without one, the placement is skipped. TNT is free by default (`freeTnt`): without a TNT credit the echo lights
+     the TNT right away instead of placing a block.
    - **Fighting:** it hits the nearest living thing within 2 blocks of where your target stood, with the damage you
-     dealt. That can be you or another echo.
+     dealt. That can be you or another echo. Players take exactly the recorded damage on Easy, Normal and Hard, and
+     none on Peaceful (like from any mob).
    - **Projectiles, buckets, fire, shears, bone meal, TNT:** they happen for real (see
      [What echoes replay](#what-echoes-replay)).
 4. **Life of an echo:** 20 health. Echoes can die to mobs, lava, TNT, the void or players, and monsters hunt them. A dead
@@ -85,15 +89,16 @@ free ghost copies: the echo holds a copy of the item you used and never runs out
 | You did | The echo does | Needs |
 |---|---|---|
 | Walk, sneak, sprint, swim, glide | Walks your path with normal collision, jumps up blocks, swims and glides freely | – |
-| Break a block | Breaks it only if it is still the same block (state included). Drops fall on the ground as if mined with your tool without enchantments | Nothing. Gives 1 credit per dropped item |
-| Place a block | Places it only if the spot is replaceable, free of entities and the block can stay there | 1 credit of the item (TNT is free while `freeTnt` is on) |
-| Hit a mob or player | Hits the nearest living thing (other than itself) within 2 blocks of where your target stood, with the damage you dealt | – |
+| Break a block | Breaks it only if it is still the same block (state included). Drops fall on the ground as if mined with your tool without enchantments | Nothing. Gives 1 credit per dropped item (none while `doTileDrops` is off) |
+| Place a block | Places it only if the spot is replaceable, free of entities and the block can stay there | 1 credit of the item |
+| Place TNT | With a TNT credit: places a normal TNT block. Without one and `freeTnt` on: lights the TNT right away (default fuse) instead of placing a block. Skipped while the `tntExplodes` game rule is off | 1 credit, or nothing while `freeTnt` is on |
+| Hit a mob or player | Hits the nearest living thing (other than itself) within 2 blocks of where your target stood, with the damage you dealt. Players take exactly that damage on Easy, Normal and Hard and none on Peaceful | – |
 | Shoot or throw (bows, crossbows, tridents, snowballs, potions, wind charges, …) | Fires the same projectile with the same velocity. Arrows can't be picked up | – |
 | Fill a bucket | Removes the source block | Gives 1 credit of the filled bucket |
 | Empty a bucket (water, lava, powder snow) | Places the fluid | 1 credit of that filled bucket |
 | Flint and steel / fire charge | Lights fire, campfires, candles and so on, or ignites TNT | Fire charge: 1 credit |
 | Shears | Carves pumpkins and shears blocks and sheep (and other shearable mobs) | – |
-| Bone meal | Uses bone meal on the block | 1 credit |
+| Bone meal (on something it works on) | Uses bone meal on the block | 1 credit |
 | Change dimension | Reappears in the new dimension | – |
 | Teleport or respawn | Jumps to the new position | – |
 | Die | Lies down for 3 seconds, then carries on | – |
@@ -120,7 +125,7 @@ lists them all, `/echoaholic config <key>` shows one). Values outside the range 
 | `globalHazardOpsPerTick` | 2 | 1–64 | Explosions, fire and fluid placements of all echoes together per tick |
 | `cheapModeDistance` | 128 | 16–1024 | Echoes farther than this many blocks from every player only move and act: no swings, poses, held items, sounds or trail |
 | `triggerBlocks` | false | on/off | Whether echoes press pressure plates and trip tripwires |
-| `freeTnt` | true | on/off | Whether echoes place recorded TNT without having a credit for it |
+| `freeTnt` | true | on/off | Whether echoes replay recorded TNT without having a credit for it. Free TNT is lit right away instead of being placed as a block |
 | `paused` | false | on/off | Replay and new echoes frozen for everybody; recording continues (also `/echoaholic pause\|resume`) |
 
 When an action is over budget, it waits: the echo's replay stops at that action and tries again next tick, and the
@@ -132,13 +137,13 @@ Measured server cost (`EchoPerfGameTests`: 32 echoes replaying a dense mining se
 
 | Command | Who | What it does |
 |---|---|---|
-| `/echoaholic` or `/echoaholic status` | operators | Show whether the mode is on, the Echo Delay and the cap |
+| `/echoaholic` or `/echoaholic status` | operators | Show whether the mode is on, the Echo Delay and the cap. For other players, plain `/echoaholic` is `/echoaholic list` |
 | `/echoaholic on\|off` | operators | Turn the mode on or off for this world |
 | `/echoaholic delay <minutes>` | operators | Set the Echo Delay, 1–120 (default 5). Only echoes that haven't joined yet use the new delay |
 | `/echoaholic max <n>` | operators | Max echoes per player, 1–64 (default 32). Lowering it retires the oldest echoes |
 | `/echoaholic list` | anyone | List your own echoes: number, what each is doing, how far behind it is, where it is and its health |
-| `/echoaholic list <player>` | operators | The same for another player |
-| `/echoaholic clear [player]` | operators | Remove a player's echoes **and** wipe their recording. The next echo is #1 again, one delay later |
+| `/echoaholic list <player>` | operators (level 2) | The same for another player |
+| `/echoaholic clear [player]` | operators | Remove a player's echoes (yours without a name) **and** wipe their recording. The next echo is #1 again, one delay later. Saved at once |
 | `/echoaholic pause\|resume` | operators | Freeze or unfreeze every echo. New echoes wait too. Recording continues |
 | `/echoaholic config [<key> [<value>]]` | operators | List, read or change the [safety caps](#safety-caps) |
 | `/echoaholic-notify <sound\|message\|trail\|status> [on\|off]` | anyone (client, needs the mod) | Personal notification settings. Without `on\|off` it switches the setting |
@@ -172,9 +177,10 @@ Measured server cost (`EchoPerfGameTests`: 32 echoes replaying a dense mining se
     can have gaps.
   - A blocked echo stops and waits (`waiting` in `/echoaholic list`), and walks on once the way is clear. If it has
     been stuck for 5 seconds and the spot it should be at is free, it teleports there.
-- **Lag grows:** budget waits, blocked paths, loading segments and paused echoes all add lag. An echo's number tells
-  you how far behind it started, not an exact clock. Each of your deaths adds 3 seconds (the echo lies down while the
-  replay waits).
+- **Lag grows:** an echo starts exactly k × delay behind you, and crossing into the next minute of the recording
+  never stalls it (segments are loaded ahead of time). Budget waits, blocked paths and paused echoes add lag, so an
+  echo's number tells you how far behind it started, not an exact clock. Each of your deaths adds 3 seconds (the echo
+  lies down while the replay waits).
 - **Cheap mode:** echoes farther than 128 blocks from every player snap along your path without physics, are silent,
   and don't swing, change pose or hold items. They still break, place and hit.
 - **Unloaded chunks:** an echo in an unloaded chunk is frozen. After 10 seconds its entity is removed, and it comes back
@@ -184,13 +190,17 @@ Measured server cost (`EchoPerfGameTests`: 32 echoes replaying a dense mining se
   6 hours behind you instead of k × delay, and an echo whose part of the recording has been dropped fades. With the
   default 5 minutes and 32 echoes, the oldest echo is 2 h 40 min behind, well inside the horizon.
 - **Your own death:** replayed as a 3 second collapse that adds 3 seconds of lag. The echo doesn't lose anything.
-- **TNT:** echoes place recorded TNT for free by default (`freeTnt`), so the TNT you set off 10 minutes ago goes off
-  again. Turn `freeTnt` off to make them need a TNT credit, like any other block.
+- **TNT:** echoes replay recorded TNT for free by default (`freeTnt`), so the TNT you set off 10 minutes ago goes off
+  again. Free TNT is lit the moment the echo would place it (it never exists as a block you could mine back), and it is
+  skipped while the `tntExplodes` game rule is off. An echo with a TNT credit places a normal TNT block instead. Turn
+  `freeTnt` off to make them need a TNT credit, like any other block.
 - **Buckets:** a bucket of fish (or axolotl, tadpole) replays as a plain water bucket. Filling and emptying cauldrons
   and shearing beehives are not replayed.
 - **Not replayed:** eggs, ender pearls, fireworks, bottles o' enchanting and fishing.
 - **Vanilla clients** see echoes as plain player-like mannequins with the owner's skin and the nametag, without the
   cyan tint or the trail.
+- **Far from spawn:** trail points are sent as plain floats, so more than about 8,000,000 blocks from the world origin
+  the trail can be off by a block. This is only visual; the echo itself is where it should be.
 - **Hardcore:** unchanged. Echoes don't change difficulty or hardcore rules, and they can still hurt you.
 
 ## Storage
@@ -205,7 +215,8 @@ Echoaholic keeps everything in the world folder, not in player data:
 
 Echoes are never saved in chunks: they are rebuilt from `world.dat` when the world loads. Files are written on a
 background thread, and segments older than `bufferHours` are deleted. `/echoaholic clear` deletes that player's
-files.
+files and saves `world.dat` right away. If `world.dat` can't be read (for example a damaged file), a copy is kept as
+`world.dat.damaged-<ms>`, the mode stays off for that session and the file is not overwritten with defaults.
 
 Measured size (the core `SegmentSizeTest`, a synthetic worst case): about **389 KiB per hour** of dense play (walking or sprinting every tick,
 a block broken every half second, a block placed every 2 seconds, a hit every 5 seconds, a shot every 30 seconds),
