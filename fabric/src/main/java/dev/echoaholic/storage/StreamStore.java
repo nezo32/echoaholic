@@ -3,6 +3,7 @@ package dev.echoaholic.storage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -39,8 +40,10 @@ import org.jspecify.annotations.Nullable;
  * {@link CompletableFuture#isDone()} and never blocks on. Work runs in submission order, so a segment is always on disk
  * before the index that lists it, and a deletion always follows the writes queued before it.
  *
- * <p><b>Freshly sealed segments</b> are readable at once: {@link #append} keeps the bytes in a pending table until the
- * IO thread has written them, and {@link #load} decodes pending bytes directly.
+ * <p><b>Freshly sealed segments</b> are readable without a disk read: {@link #append} keeps the bytes of each player's
+ * last {@value #RECENT_PER_OWNER} segments in a pending table, also after the IO thread has written them, until the
+ * first {@link #load} / {@link #cached} decodes them into the LRU cache (or they are evicted, wiped, or pushed out by
+ * newer segments). So an echo replaying the newest segments never waits for the IO thread.
  *
  * <p><b>Failures</b> never reach the game: a failed write drops the pending bytes (a later load of that segment fails,
  * and the replay loop skips the gap), a failed read fails the future, and each player's first problem is logged as a
@@ -56,6 +59,8 @@ public final class StreamStore implements AutoCloseable {
 	private static final long JOIN_TIMEOUT_SECONDS = 60;
 	/** Finished loads nobody asked for again are moved into the cache once this many loads are tracked. */
 	private static final int LOADING_SWEEP_THRESHOLD = 64;
+	/** Newest segments per player whose bytes stay in memory until their first load. */
+	public static final int RECENT_PER_OWNER = 4;
 
 	private record Key(UUID owner, long seq) {}
 
@@ -73,8 +78,13 @@ public final class StreamStore implements AutoCloseable {
 		}
 	};
 	private final Map<Key, CompletableFuture<DecodedSegment>> loading = new HashMap<>();
-	/** Sealed bytes not yet on disk. Written by the server thread, cleared by the IO thread. */
+	/**
+	 * Sealed bytes of each player's newest segments (written or not yet), until their first load. Filled and trimmed by
+	 * the server thread; the IO thread only removes an entry whose write failed.
+	 */
 	private final Map<Key, byte[]> pending = new ConcurrentHashMap<>();
+	/** Server thread: seqs appended per player, newest last, at most {@link #RECENT_PER_OWNER}. */
+	private final Map<UUID, ArrayDeque<Long>> recent = new HashMap<>();
 	/** Shared with the IO thread: the next index content to write per owner. */
 	private final Map<UUID, IndexSnapshot> indexSnapshots = new ConcurrentHashMap<>();
 	/** Owners whose last index write failed; {@link #flush} tries again. */
@@ -158,12 +168,17 @@ public final class StreamStore implements AutoCloseable {
 		Key key = new Key(owner, s.seq());
 		byte[] bytes = s.bytes();
 		pending.put(key, bytes);
+		ArrayDeque<Long> seqs = recent.computeIfAbsent(owner, o -> new ArrayDeque<>());
+		seqs.addLast(s.seq());
+		// an older segment leaving memory is either on disk or queued for writing before any read of it (FIFO)
+		while (seqs.size() > RECENT_PER_OWNER) pending.remove(new Key(owner, seqs.removeFirst()));
 		Path file = SegmentFiles.segmentPath(SegmentFiles.ownerDir(streamsDir, owner), s.seq());
 		boolean queued = submit(owner, () -> {
 			try {
 				SegmentFiles.writeAtomic(file, bytes);
-			} finally {
-				pending.remove(key, bytes);
+			} catch (IOException | RuntimeException e) {
+				pending.remove(key, bytes); // dropped: a later load fails and the segment is a gap
+				throw e;
 			}
 		});
 		if (!queued) pending.remove(key, bytes);
@@ -194,13 +209,25 @@ public final class StreamStore implements AutoCloseable {
 		return evicted;
 	}
 
-	/** The decoded segment if it is in the cache (or a finished load just delivered it), else null. Never loads. */
+	/**
+	 * The decoded segment if it is in the cache, a finished load just delivered it, or it is one of the player's recent
+	 * segments still in memory (decoded here, no disk access); else null. Never starts a disk read.
+	 */
 	public @Nullable DecodedSegment cached(UUID owner, long seq) {
 		Key key = new Key(owner, seq);
 		DecodedSegment hit = cache.get(key);
 		if (hit != null) return hit;
 		CompletableFuture<DecodedSegment> f = loading.get(key);
-		return f != null ? promote(key, f) : null;
+		if (f != null) return promote(key, f);
+		byte[] bytes = pending.get(key);
+		if (bytes == null) return null;
+		try {
+			return decodePending(key, bytes);
+		} catch (IOException e) {
+			warn(owner, "Echoaholic could not decode a fresh segment " + seq + " of " + owner, e);
+			loading.put(key, CompletableFuture.failedFuture(e));
+			return null;
+		}
 	}
 
 	/**
@@ -221,12 +248,12 @@ public final class StreamStore implements AutoCloseable {
 		byte[] bytes = pending.get(key);
 		if (bytes != null) {
 			try {
-				DecodedSegment decoded = SegmentReader.decode(bytes);
-				cache.put(key, decoded);
-				return CompletableFuture.completedFuture(decoded);
+				return CompletableFuture.completedFuture(decodePending(key, bytes));
 			} catch (IOException e) {
 				warn(owner, "Echoaholic could not decode a fresh segment " + seq + " of " + owner, e);
-				return CompletableFuture.failedFuture(e);
+				CompletableFuture<DecodedSegment> failed = CompletableFuture.failedFuture(e);
+				loading.put(key, failed);
+				return failed;
 			}
 		}
 		if (loading.size() >= LOADING_SWEEP_THRESHOLD) sweepLoading();
@@ -259,6 +286,7 @@ public final class StreamStore implements AutoCloseable {
 		cache.keySet().removeIf(k -> k.owner.equals(owner));
 		loading.keySet().removeIf(k -> k.owner.equals(owner));
 		pending.keySet().removeIf(k -> k.owner.equals(owner));
+		recent.remove(owner);
 		Path dir = SegmentFiles.ownerDir(streamsDir, owner);
 		submit(owner, () -> SegmentFiles.deleteOwnerDir(dir));
 	}
@@ -350,6 +378,14 @@ public final class StreamStore implements AutoCloseable {
 			warn(owner, "Echoaholic could not read segment " + SegmentFiles.describe(file) + "; it is skipped", e);
 			throw new CompletionException(e);
 		}
+	}
+
+	/** Decodes in-memory bytes of a recent segment into the LRU cache; the bytes are released (the file serves later). */
+	private DecodedSegment decodePending(Key key, byte[] bytes) throws IOException {
+		DecodedSegment decoded = SegmentReader.decode(bytes);
+		cache.put(key, decoded);
+		pending.remove(key, bytes);
+		return decoded;
 	}
 
 	private @Nullable SegmentMeta findMeta(UUID owner, long seq) {

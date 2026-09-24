@@ -71,6 +71,22 @@ class StreamStoreTest {
 	}
 
 	@Test
+	void recentSegmentsStayInMemoryAfterTheWrite() throws Exception {
+		for (int i = 0; i < 6; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true);
+		// prove no disk read: remove the files of the newest segments
+		for (int i = 2; i < 6; i++) Files.delete(SegmentFiles.segmentPath(dir(), i));
+		assertNotNull(store.cached(OWNER, 5)); // decoded from memory without a future
+		for (int i = 2; i < 5; i++) {
+			CompletableFuture<DecodedSegment> f = store.load(OWNER, i);
+			assertTrue(f.isDone() && !f.isCompletedExceptionally(), "seq " + i);
+		}
+		// older than the last RECENT_PER_OWNER: read from disk
+		CompletableFuture<DecodedSegment> old = store.load(OWNER, 1);
+		assertEquals(20, await(old).startTick());
+	}
+
+	@Test
 	void persistsAndReopensIdentically() throws Exception {
 		for (int i = 0; i < 5; i++) store.append(OWNER, sealed(i, i * 20L, 20));
 		store.flush(true);

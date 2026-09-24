@@ -26,6 +26,8 @@ public final class MovementRules {
 	public static final int TRAIL_POINTS = 20;
 	/** Stream ticks between two trail points (20 points x 5 = the next 5 seconds). */
 	public static final int TRAIL_STEP = 5;
+	/** The next segment starts loading when the cursor is this close (ticks) to the end of the current one. */
+	public static final int PREFETCH_TICKS = 40;
 	/** Movement below this (blocks per tick) counts as standing still. */
 	public static final double MOVE_EPSILON = 0.01;
 

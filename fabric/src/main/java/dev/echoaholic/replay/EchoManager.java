@@ -331,11 +331,21 @@ public final class EchoManager implements EchoListener {
 		st.cursor = c + 1;
 		e = rt.entity;
 
+		// Segment boundary: move into the next segment on this same tick when it is ready (prefetched), so the echo
+		// does not idle; otherwise prefetch it while the cursor nears the end of this one.
+		DecodedSegment nextSeg = seg;
+		if (st.cursor >= seg.endTick()) {
+			nextSeg = segment(rt);
+			if (rt.removed) return ADVANCED;
+		} else {
+			prefetch(rt, seg);
+		}
+
 		// Next target.
 		if (st.collapseTicks > 0) {
 			e.steer(null, e.getYRot(), e.getXRot(), false);
-		} else if (!rt.cheap && st.cursor < seg.endTick()) {
-			Move next = seg.positionAt(st.cursor).orElse(null);
+		} else if (!rt.cheap && nextSeg != null && nextSeg.contains(st.cursor)) {
+			Move next = nextSeg.positionAt(st.cursor).orElse(null);
 			if (next != null) {
 				if (MovementRules.isJump(e.distanceToSqr(next.x(), next.y(), next.z()))) {
 					teleport(rt, next.x(), next.y(), next.z());
@@ -348,9 +358,25 @@ public final class EchoManager implements EchoListener {
 		rt.activity = restingActivity(rt);
 
 		if (!rt.cheap && Math.floorMod(now + st.index, (long) MovementRules.TRAIL_INTERVAL) == 0) {
-			sendTrail(rt, e, (ServerLevel) e.level(), seg);
+			sendTrail(rt, e, (ServerLevel) e.level(), nextSeg != null ? nextSeg : seg);
 		}
 		return ADVANCED;
+	}
+
+	/**
+	 * Starts loading the segment after {@code seg} once the cursor is within {@link MovementRules#PREFETCH_TICKS} of its
+	 * end (once per segment). The future is kept as the runtime's pending load, so {@link #segment} promotes it.
+	 */
+	private void prefetch(EchoRuntime rt, DecodedSegment seg) {
+		long end = seg.endTick();
+		if (end - rt.state.cursor > MovementRules.PREFETCH_TICKS || rt.prefetchedEnd == end) return;
+		SegmentMeta next = store.ring(rt.owner).segmentAtOrAfter(end).orElse(null);
+		if (next == null) return; // not sealed yet: try again next tick
+		rt.prefetchedEnd = end;
+		if (store.cached(rt.owner, next.seq()) != null) return;
+		if (rt.pending != null && rt.pendingSeq == next.seq()) return;
+		rt.pending = store.load(rt.owner, next.seq());
+		rt.pendingSeq = next.seq();
 	}
 
 	/** True iff {@code entry} still has a Teleport, Dimension or Death action at or after {@code from}. */
@@ -891,6 +917,7 @@ public final class EchoManager implements EchoListener {
 			rt.segment = null;
 			rt.pending = null;
 			rt.pendingSeq = -1;
+			rt.prefetchedEnd = -1;
 			if (e != null) e.managedDiscard();
 		}
 		data.setDirty();

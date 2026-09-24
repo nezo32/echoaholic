@@ -33,6 +33,8 @@ public final class EchoRuntime {
 	/** Pending load of {@link #pendingSeq}. */
 	@Nullable CompletableFuture<DecodedSegment> pending;
 	long pendingSeq = -1;
+	/** End tick of the segment whose successor was already prefetched (-1 = none). */
+	long prefetchedEnd = -1;
 
 	int unloadedTicks;
 	int stuckTicks;
