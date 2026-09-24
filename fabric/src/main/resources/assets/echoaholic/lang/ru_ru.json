@@ -42,7 +42,7 @@
   "echoaholic.settings.notifyMessage": "Сообщение об эхе",
   "echoaholic.settings.notifyMessage.tooltip": "Сообщение над панелью быстрого доступа (👥 Эхо #7 теперь с вами), когда в мире появляется новое Эхо вас.",
   "echoaholic.settings.showTrail": "След эха",
-  "echoaholic.settings.showTrail.tooltip": "Показывать еле заметный голубой след из частиц там, где каждое эхо пройдёт в ближайшие 5 секунд.",
+  "echoaholic.settings.showTrail.tooltip": "Показывать еле заметный голубой след из частиц на пути, который каждое эхо пройдёт в ближайшие 5 секунд.",
   "echoaholic.command.notify.sound": "Звук эха: %s",
   "echoaholic.command.notify.message": "Сообщение об эхе: %s",
   "echoaholic.command.notify.trail": "След эха: %s"

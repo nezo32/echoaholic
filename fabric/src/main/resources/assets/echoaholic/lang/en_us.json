@@ -42,7 +42,7 @@
   "echoaholic.settings.notifyMessage": "Echo message",
   "echoaholic.settings.notifyMessage.tooltip": "Show the actionbar message (👥 Echo #7 has joined you) when a new Echo of you joins the world.",
   "echoaholic.settings.showTrail": "Echo trail",
-  "echoaholic.settings.showTrail.tooltip": "Show a faint cyan trail of particles along the path every echo walks next, 5 seconds ahead.",
+  "echoaholic.settings.showTrail.tooltip": "Show a faint cyan trail of particles along the path each echo will walk in the next 5 seconds.",
   "echoaholic.command.notify.sound": "Echo sound: %s",
   "echoaholic.command.notify.message": "Echo message: %s",
   "echoaholic.command.notify.trail": "Echo trail: %s"
