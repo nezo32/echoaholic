@@ -1,5 +1,11 @@
 # Reusable release pipeline
 
+> This is Echoaholic's copy of the shared document that lives in
+> [nezo32/enchantaholic](https://github.com/nezo32/enchantaholic/blob/main/docs/ci/REUSABLE_RELEASE_PIPELINE.md).
+> "This repository" below means `nezo32/enchantaholic`, which hosts the workflows. Echoaholic calls them pinned to a
+> SHA and keeps byte-identical copies (see [RELEASING.md](RELEASING.md#bumping-the-shared-pipeline)); for Echoaholic
+> as a caller, see [Projects without Bedrock](#projects-without-bedrock).
+
 This is the default release pipeline for all of nezo32's projects. You push a SemVer tag, and one workflow run builds
 the project, creates the GitHub release with the build outputs attached and, if the project is on CurseForge, uploads
 the files there.
@@ -19,7 +25,7 @@ Contents: [What it is](#1-what-it-is) · [Quick start](#2-quick-start) · [Build
 [Reference](#4-reference) · [Recipes](#5-recipes) · [CurseForge names](#6-finding-curseforge-version-names) ·
 [Tag rules](#7-tag-rules) · [Re-running](#8-re-running-a-release) · [Security](#9-security) ·
 [Private host](#10-private-host-repository) · [Moving](#11-moving-to-a-dedicated-repository) ·
-[Alternatives](#12-alternatives)
+[Alternatives](#12-alternatives) · [Projects without Bedrock](#projects-without-bedrock)
 
 ## 1. What it is
 
@@ -43,7 +49,7 @@ move between jobs with `actions/upload-artifact` and `actions/download-artifact`
 
 For a new Fabric mod repository. For other project types, change step 5 by following [Recipes](#5-recipes).
 
-1. **Copy the caller.** Copy [`.github/templates/release-caller.yml`](../../.github/templates/release-caller.yml)
+1. **Copy the caller.** Copy [`.github/templates/release-caller.yml`](https://github.com/nezo32/enchantaholic/blob/main/.github/templates/release-caller.yml)
    to `<your-repo>/.github/workflows/release.yml`.
 2. **Pin it.** Replace every `@main` in that file with a full commit SHA of `nezo32/enchantaholic`:
    ```bash
@@ -236,7 +242,7 @@ the tag is updated in place and its assets are overwritten.
 
 Output: `file-id` (of the primary file; `0` in dry-run). Permissions: `contents: read` (reads the release body).
 
-The upload logic is [`scripts/curseforge-upload.sh`](../../scripts/curseforge-upload.sh). The workflow carries an
+The upload logic is [`scripts/curseforge-upload.sh`](https://github.com/nezo32/enchantaholic/blob/main/scripts/curseforge-upload.sh). The workflow carries an
 inlined, byte-identical copy, because a called workflow cannot read files from the repository that hosts it.
 CI runs `scripts/check-inlined-script.sh` to keep the two in sync: edit the script, then paste it into the heredoc.
 
@@ -273,7 +279,7 @@ empty prefixes the script does not fetch it. All Bedrock versions share one type
 
 **Several artifacts from one repository (monorepo).** Use one build job per project, each with its own
 `artifact-name`; attach all of them with `artifact-pattern: "{a,b}"` on the release job, and use one CurseForge job per
-CurseForge project. Enchantaholic's own [`release.yml`](../../.github/workflows/release.yml) is a working example
+CurseForge project. Enchantaholic's own [`release.yml`](https://github.com/nezo32/enchantaholic/blob/main/.github/workflows/release.yml) is a working example
 (a Fabric mod and a Bedrock add-on).
 
 **CI for pull requests.** The build workflows also work without a version, so a project's `ci.yml` can reuse them:
@@ -281,7 +287,7 @@ CurseForge project. Enchantaholic's own [`release.yml`](../../.github/workflows/
   build:
     uses: nezo32/enchantaholic/.github/workflows/reusable-build-gradle.yml@<sha>
 ```
-See Enchantaholic's [`ci.yml`](../../.github/workflows/ci.yml).
+See Enchantaholic's [`ci.yml`](https://github.com/nezo32/enchantaholic/blob/main/.github/workflows/ci.yml).
 
 ## 6. Finding CurseForge version names
 
@@ -429,3 +435,20 @@ after the release job:
 ## Using a GitHub Environment for CurseForge settings
 
 You can keep `CURSEFORGE_TOKEN` (secret) and `CURSEFORGE_PROJECT_ID` (variable) in an Environment instead of at repository level, and add protection rules such as required reviewers before anything is published. Set the repository variable `CURSEFORGE_ENVIRONMENT` to the Environment's name (the template passes it as `environment:`); the upload job then runs in that Environment and reads the id and token from it. Job-level `if:` conditions cannot see Environment variables, which is why the id is resolved inside the job (`project-id-var`) and a missing id produces a warning instead of a silently skipped job.
+
+## Projects without Bedrock
+
+Bedrock is optional. A Java-only project (one Gradle build, one CurseForge project) simply leaves out the Node build
+job and the Bedrock CurseForge job: no `reusable-build-node.yml` call, no `api-base` / `version-type-prefixes`
+overrides and no `CURSEFORGE_BEDROCK_*` variables. The Gradle-only caller in the template is already this setup.
+
+Nothing in the reusable workflows depends on an edition. Only some input defaults are edition-flavoured:
+`reusable-build-node.yml` defaults `artifact-files` to `dist/*.mcaddon`, and `reusable-publish-curseforge.yml` defaults
+to the Java host (`api-base`, `primary-file` for jars, `version-type-prefixes`). Callers override whatever does not
+fit.
+
+[Echoaholic's `release.yml`](https://github.com/nezo32/echoaholic/blob/main/.github/workflows/release.yml) is a
+Java-only caller: `version` → `build-mod` (Gradle in `fabric/`) → `github-release` (`artifact-pattern: fabric-mod`) →
+`curseforge-mod`, all pinned to one SHA of `nezo32/enchantaholic`. Its
+[`ci.yml`](https://github.com/nezo32/echoaholic/blob/main/.github/workflows/ci.yml) reuses `reusable-build-gradle.yml`
+for the 26.3 and 26.2 builds and has no `addon / build` check.
