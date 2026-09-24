@@ -148,7 +148,12 @@ public final class SyntheticStreams {
 
 	/** A break of {@code state} at an absolute position with an empty hand. */
 	public static BlockBreak breakOf(BlockPos abs, String state) {
-		return new BlockBreak(abs.getX(), abs.getY(), abs.getZ(), state, "minecraft:air");
+		return breakOf(abs, state, "minecraft:air");
+	}
+
+	/** A break of {@code state} at an absolute position with {@code tool}. */
+	public static BlockBreak breakOf(BlockPos abs, String state, String tool) {
+		return new BlockBreak(abs.getX(), abs.getY(), abs.getZ(), state, tool);
 	}
 
 	/**

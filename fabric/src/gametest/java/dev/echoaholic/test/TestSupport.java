@@ -92,6 +92,7 @@ public final class TestSupport {
 	public static EchoServer echoWorld(GameTestHelper h) {
 		EchoTuning.segmentTicksOverride = SEGMENT;
 		EchoTuning.delayTicksOverride = DELAY;
+		EchoTuning.bufferTicksOverride = 0;
 		EchoServer es = es(h);
 		EchoConfig c = es.config();
 		if (!c.enabled() || c.paused()) es.setConfig(c.withEnabled(true).withPaused(false));
