@@ -1,0 +1,103 @@
+# Derives release metadata from a SemVer tag (v1.2.3, v1.2.3-beta.1, v1.2.3-rc.1) and, optionally, rejects tags
+# whose commit is not on the release branch. Build metadata (+...) is rejected: it would leak into file names and
+# CurseForge display names inconsistently.
+name: reusable / version
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to parse. Empty = release tag of the triggering event, else github.ref_name.
+        type: string
+        default: ""
+      tag-prefix:
+        description: Prefix stripped from the tag to get the version.
+        type: string
+        default: "v"
+      release-branch:
+        description: When set (e.g. main), fail unless the tagged commit is contained in this branch. Empty = no check.
+        type: string
+        default: ""
+    outputs:
+      tag:
+        description: The full tag, e.g. v1.2.3-beta.1
+        value: ${{ jobs.version.outputs.tag }}
+      version:
+        description: Version without prefix, e.g. 1.2.3-beta.1
+        value: ${{ jobs.version.outputs.version }}
+      prerelease:
+        description: "'true' when the version has a pre-release part"
+        value: ${{ jobs.version.outputs.prerelease }}
+      release-type:
+        description: CurseForge/Modrinth release type (release | beta | alpha)
+        value: ${{ jobs.version.outputs.release-type }}
+
+permissions: {}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # compare API for the release-branch check
+    outputs:
+      tag: ${{ steps.parse.outputs.tag }}
+      version: ${{ steps.parse.outputs.version }}
+      prerelease: ${{ steps.parse.outputs.prerelease }}
+      release-type: ${{ steps.parse.outputs.release-type }}
+    steps:
+      - id: parse
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          PREFIX: ${{ inputs.tag-prefix }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$EVENT_TAG}"
+          if [[ -z "$tag" || "$tag" != "$PREFIX"* ]]; then
+            echo "::error::Tag '$tag' does not start with the prefix '$PREFIX'"
+            exit 1
+          fi
+          version="${tag#"$PREFIX"}"
+          re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z.-]+))?$'
+          if [[ ! "$version" =~ $re ]]; then
+            echo "::error::Tag '$tag' is not '${PREFIX}MAJOR.MINOR.PATCH[-prerelease]' (no +build metadata)"
+            exit 1
+          fi
+          pre="${BASH_REMATCH[5]}"
+          if [[ -z "$pre" ]]; then prerelease=false; rtype=release
+          else
+            prerelease=true
+            case "${pre,,}" in
+              alpha*|a.*|dev*|snapshot*|nightly*) rtype=alpha ;;
+              *) rtype=beta ;;   # beta, rc, pre, anything else
+            esac
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "release-type=$rtype"
+          } >> "$GITHUB_OUTPUT"
+          echo "### $tag → version \`$version\`, prerelease=$prerelease, type=$rtype" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check tag is on ${{ inputs.release-branch }}
+        if: inputs.release-branch != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ inputs.release-branch }}
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # compare BRANCH...TAG: "behind" (tag is an ancestor of the branch) or "identical" = tag is on the branch
+          if ! status="$(gh api "repos/$GITHUB_REPOSITORY/compare/${BRANCH}...${TAG}" --jq .status)"; then
+            echo "::error::Could not compare '$TAG' with '$BRANCH': does the tag exist? (run the Release workflow from $BRANCH with a new tag to create it)"
+            exit 1
+          fi
+          case "$status" in
+            behind|identical) echo "Tag $TAG is on $BRANCH ($status)" ;;
+            *)
+              echo "::error::Tag $TAG is not on $BRANCH (compare status: $status). Tag a commit of $BRANCH instead."
+              exit 1
+              ;;
+          esac

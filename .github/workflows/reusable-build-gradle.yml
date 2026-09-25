@@ -1,0 +1,121 @@
+# Builds a Gradle (e.g. Fabric Loom) project and uploads the jars as an artifact.
+name: reusable / build-gradle
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build (empty = the triggering ref).
+        type: string
+        default: ""
+      working-directory:
+        description: Directory containing gradlew.
+        type: string
+        default: "."
+      java-version:
+        type: string
+        default: "25"
+      java-distribution:
+        type: string
+        default: temurin
+      gradle-tasks:
+        description: Tasks/arguments passed to ./gradlew (build = compile + test + check).
+        type: string
+        default: build
+      version:
+        description: Version injected as -P<version-property>=<version>. Empty = keep gradle.properties.
+        type: string
+        default: ""
+      version-property:
+        type: string
+        default: mod_version
+      cache-provider:
+        description: "setup-gradle cache provider: basic (OSS, actions/cache) or enhanced (proprietary, free for public repos)."
+        type: string
+        default: basic
+      artifact-name:
+        type: string
+        default: gradle-libs
+      artifact-files:
+        description: Newline-separated bash globs (extglob on), relative to working-directory.
+        type: string
+        default: build/libs/*.jar
+      retention-days:
+        type: number
+        default: 7
+    outputs:
+      artifact-name:
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact-name: ${{ inputs.artifact-name }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: ${{ inputs.cache-provider }}
+          # cache is written only from the default branch; PRs/tags read it
+          add-job-summary-as-pr-comment: never
+
+      - name: Build
+        env:
+          VERSION: ${{ inputs.version }}
+          VERSION_PROPERTY: ${{ inputs.version-property }}
+          TASKS: ${{ inputs.gradle-tasks }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          args=()
+          [[ -n "$VERSION" ]] && args+=("-P${VERSION_PROPERTY}=${VERSION}")
+          # shellcheck disable=SC2086  # TASKS is intentionally word-split
+          ./gradlew $TASKS "${args[@]}" --stacktrace
+
+      - name: Stage artifacts
+        env:
+          FILES: ${{ inputs.artifact-files }}
+        run: |
+          set -euo pipefail
+          shopt -s extglob nullglob globstar
+          out="$RUNNER_TEMP/artifact"; mkdir -p "$out"
+          while IFS= read -r pattern; do
+            [[ -z "${pattern// }" ]] && continue
+            # shellcheck disable=SC2206  # glob expansion wanted
+            matches=( $pattern )
+            [[ ${#matches[@]} -gt 0 ]] || { echo "::error::no files match '$pattern'"; exit 1; }
+            cp -v "${matches[@]}" "$out/"
+          done <<< "$FILES"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/artifact/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}-reports
+          path: ${{ inputs.working-directory }}/**/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7

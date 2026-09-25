@@ -1,0 +1,81 @@
+# Feature flow: <type>/<name> branch -> PR -> main (squash). Runs on every PR to main and on main.
+# Required status checks on main: branch-name, actionlint, scripts, mod / build, mod-26_2 / build.
+# The builds call the shared reusable workflows of nezo32/enchantaholic, pinned to the same SHA as release.yml
+# (docs/ci/REUSABLE_RELEASE_PIPELINE.md). The local reusable-*.yml are vendored copies, checked by the scripts job.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  branch-name:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if [[ ! "$BRANCH" =~ ^(feature|feat|fix|hotfix|chore|docs|refactor|ci|build|test|perf|release)/[a-z0-9._-]+$|^(dependabot|renovate|claude)/ ]]; then
+            echo "::error::Branch '$BRANCH' should be <type>/<short-name>, type in feature|feat|fix|hotfix|chore|docs|refactor|ci|build|test|perf|release"
+            exit 1
+          fi
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+          # .github/templates/ is not a workflow directory, so it has to be linted explicitly
+          ./actionlint -color .github/templates/release-caller.yml
+
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: shellcheck scripts/*.sh scripts/test/*.sh
+      - name: curseforge-upload.sh dry-run tests
+        run: bash scripts/test/curseforge-upload.test.sh
+      - name: check-reusable-sync.sh tests
+        run: bash scripts/test/check-reusable-sync.test.sh
+      - name: Inlined script copy is up to date
+        run: bash scripts/check-inlined-script.sh
+      - name: Vendored pipeline matches the pinned upstream SHA
+        run: bash scripts/check-reusable-sync.sh
+
+  mod:
+    uses: nezo32/enchantaholic/.github/workflows/reusable-build-gradle.yml@a3e3f7d4160e692a64845c196922c780d1608f9f
+    with:
+      working-directory: fabric
+      artifact-name: fabric-mod-ci
+      artifact-files: build/libs/echoaholic-*.jar
+
+  # Same jar supports 26.2–26.3; build + gametests against the older target too.
+  mod-26_2:
+    uses: nezo32/enchantaholic/.github/workflows/reusable-build-gradle.yml@a3e3f7d4160e692a64845c196922c780d1608f9f
+    with:
+      working-directory: fabric
+      gradle-tasks: build -Pmc=26.2
+      artifact-name: fabric-mod-ci-26.2
+      artifact-files: build/libs/echoaholic-*.jar

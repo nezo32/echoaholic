@@ -1,0 +1,115 @@
+# Echoaholic release: push tag vX.Y.Z[-pre] (on a commit of main) ->
+#   version -> build-mod -> github-release -> curseforge-mod
+# Or: Actions -> Release -> Run workflow on main with a new tag: the tag is created on main's tip.
+# Everything runs in ONE workflow run: releases created with GITHUB_TOKEN never trigger other workflows.
+# This repo calls the shared reusable workflows of nezo32/enchantaholic, pinned to a full commit SHA
+# (see docs/ci/REUSABLE_RELEASE_PIPELINE.md). To bump the pipeline: change the SHA in every "uses:" line here and
+# in ci.yml, re-vendor .github/workflows/reusable-*.yml and scripts/curseforge-upload.sh from that SHA, and run
+# scripts/check-reusable-sync.sh. Maintainer runbook: docs/ci/RELEASING.md.
+#
+# Repo config: secret CURSEFORGE_TOKEN; var CURSEFORGE_PROJECT_ID (empty = CurseForge skipped);
+# optional vars CURSEFORGE_GAME_VERSIONS, CURSEFORGE_ENVIRONMENT.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release, e.g. v1.2.3. A new tag is created on the tip of main; an existing one is rebuilt.
+        required: true
+      skip-curseforge:
+        description: Only (re)build and update the GitHub release; do not upload to CurseForge
+        type: boolean
+        default: false
+      curseforge-dry-run:
+        description: Resolve CurseForge versions and print the upload metadata without uploading
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Manual runs: create the tag if it does not exist yet (on the tip of main), otherwise re-release it.
+  # A tag created with GITHUB_TOKEN does not start another run, so the release continues in this one.
+  create-tag:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create tag on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::Tag '$TAG' is not vX.Y.Z[-pre] (e.g. v1.2.3 or v1.2.3-beta.1)"; exit 1; }
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists: rebuilding and re-releasing it" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$REF" == refs/heads/main ]] || { echo "::error::Tag $TAG does not exist. Run the workflow from main to create it (got $REF)."; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
+          echo "Created $TAG at $SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  version:
+    needs: create-tag
+    if: ${{ !cancelled() && needs.create-tag.result != 'failure' }}
+    uses: nezo32/enchantaholic/.github/workflows/reusable-version.yml@a3e3f7d4160e692a64845c196922c780d1608f9f
+    with:
+      tag: ${{ inputs.tag }}
+      release-branch: main
+
+  build-mod:
+    needs: version
+    if: ${{ !cancelled() && !failure() }}
+    uses: nezo32/enchantaholic/.github/workflows/reusable-build-gradle.yml@a3e3f7d4160e692a64845c196922c780d1608f9f
+    with:
+      ref: ${{ needs.version.outputs.tag }}
+      working-directory: fabric
+      java-version: "25"
+      version: ${{ needs.version.outputs.version }}
+      artifact-name: fabric-mod
+      artifact-files: build/libs/echoaholic-*.jar
+
+  github-release:
+    needs: [version, build-mod]
+    if: ${{ !cancelled() && !failure() }}
+    permissions:
+      contents: write
+    uses: nezo32/enchantaholic/.github/workflows/reusable-github-release.yml@a3e3f7d4160e692a64845c196922c780d1608f9f
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+      name: Echoaholic ${{ needs.version.outputs.version }}
+      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+      artifact-pattern: fabric-mod
+
+  curseforge-mod:
+    needs: [version, github-release]
+    if: ${{ !cancelled() && !failure() && !inputs.skip-curseforge }}
+    uses: nezo32/enchantaholic/.github/workflows/reusable-publish-curseforge.yml@a3e3f7d4160e692a64845c196922c780d1608f9f
+    with:
+      # Read inside the job so repository- and Environment-level variables both work.
+      project-id-var: CURSEFORGE_PROJECT_ID
+      environment: ${{ vars.CURSEFORGE_ENVIRONMENT || 'Echoaholic' }}
+      artifact-pattern: fabric-mod
+      primary-file: "echoaholic-!(*-sources).jar"
+      additional-files: "echoaholic-*-sources.jar"
+      # When a 26.2.x / 26.3.x patch ships, add it to the repo var; no code change needed.
+      game-versions: ${{ vars.CURSEFORGE_GAME_VERSIONS || '26.2,26.3,Fabric,Java 25,Client,Server' }}
+      release-type: ${{ needs.version.outputs.release-type }}
+      display-name: Echoaholic ${{ needs.version.outputs.version }} (Fabric)
+      relations: fabric-api:requiredDependency
+      tag: ${{ needs.version.outputs.tag }}
+      dry-run: ${{ inputs.curseforge-dry-run == true }}
+    secrets:
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}

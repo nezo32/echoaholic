@@ -1,0 +1,253 @@
+package dev.echoaholic.storage;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import dev.echoaholic.core.action.Move;
+import dev.echoaholic.core.stream.DecodedSegment;
+import dev.echoaholic.core.stream.SealedSegment;
+import dev.echoaholic.core.stream.SegmentMeta;
+import dev.echoaholic.core.stream.SegmentWriter;
+
+/** StreamStore against a real temp folder (no Minecraft classes involved). */
+class StreamStoreTest {
+	private static final UUID OWNER = UUID.fromString("11111111-2222-3333-4444-555555555555");
+
+	@TempDir
+	Path tmp;
+	private StreamStore store;
+
+	@BeforeEach
+	void open() {
+		store = new StreamStore(tmp);
+	}
+
+	@AfterEach
+	void closeStore() {
+		store.close();
+	}
+
+	private static SealedSegment sealed(long seq, long start, int ticks) {
+		SegmentWriter w = new SegmentWriter(start, ticks);
+		for (long t = start; t < start + ticks; t++) w.append(t, new Move(t, 70, -t, 0, 0), List.of());
+		return new SealedSegment(seq, start, start + ticks, w.seal());
+	}
+
+	private Path dir() {
+		return SegmentFiles.ownerDir(tmp, OWNER);
+	}
+
+	private static DecodedSegment await(CompletableFuture<DecodedSegment> f) throws Exception {
+		return f.get(10, TimeUnit.SECONDS);
+	}
+
+	@Test
+	void freshSegmentIsDecodedOffTheServerThread() throws Exception {
+		store.append(OWNER, sealed(0, 0, 20));
+		assertEquals(List.of(new SegmentMeta(0, 0, 20, sealed(0, 0, 20).bytes().length)), store.ring(OWNER).segments());
+		assertNull(store.cached(OWNER, 0)); // cached() never decodes
+		CompletableFuture<DecodedSegment> f = store.load(OWNER, 0);
+		assertSame(f, store.load(OWNER, 0)); // one decode per segment
+		assertEquals(20, await(f).tickCount());
+		assertSame(f.join(), store.cached(OWNER, 0));
+	}
+
+	@Test
+	void recentSegmentsStayInMemoryAfterTheWrite() throws Exception {
+		for (int i = 0; i < 6; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true);
+		// prove no disk read: remove the files of the newest segments
+		for (int i = 2; i < 6; i++) Files.delete(SegmentFiles.segmentPath(dir(), i));
+		for (int i = 2; i < 6; i++) assertEquals(i * 20L, await(store.load(OWNER, i)).startTick(), "seq " + i);
+		for (int i = 2; i < 6; i++) assertNotNull(store.cached(OWNER, i));
+		// older than the last RECENT_PER_OWNER: read from disk
+		assertEquals(20, await(store.load(OWNER, 1)).startTick());
+	}
+
+	@Test
+	void synchronousDecodesAreBudgetedPerOwnerPerTick() {
+		for (int i = 0; i < 4; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(OWNER, 0));
+		assertNull(store.decodeNowIfResident(OWNER, 1)); // this owner's one decode for the tick is used
+		assertNotNull(store.decodeNowIfResident(OWNER, 0)); // cache hits cost nothing
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(OWNER, 1));
+		assertEquals(1, StreamStore.SYNC_DECODES_PER_OWNER_PER_TICK);
+	}
+
+	@Test
+	void ownersDoNotStarveEachOtherUpToTheGlobalCap() {
+		int owners = StreamStore.MAX_SYNC_DECODES_PER_TICK + 2;
+		UUID[] ids = new UUID[owners];
+		for (int o = 0; o < owners; o++) {
+			ids[o] = new UUID(7, o);
+			store.append(ids[o], sealed(0, 0, 20)); // everybody sealed a segment on the same tick
+		}
+		store.beginTick();
+		for (int o = 0; o < StreamStore.MAX_SYNC_DECODES_PER_TICK; o++) assertNotNull(store.decodeNowIfResident(ids[o], 0), "owner " + o);
+		assertNull(store.decodeNowIfResident(ids[owners - 1], 0)); // global safety cap
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(ids[owners - 1], 0));
+	}
+
+	@Test
+	void forgetResidentReleasesWrittenBytesOnly() throws Exception {
+		for (int i = 0; i < 3; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true); // all written
+		store.forgetResident(OWNER);
+		store.beginTick();
+		assertNull(store.decodeNowIfResident(OWNER, 2)); // no longer in memory
+		assertEquals(40, await(store.load(OWNER, 2)).startTick()); // still on disk
+
+		// a segment appended and forgotten at once: its write may still be queued, so its bytes may stay until then
+		store.append(OWNER, sealed(3, 60, 20));
+		store.forgetResident(OWNER);
+		store.flush(true); // write done -> the IO thread released the bytes itself
+		assertTrue(Files.exists(SegmentFiles.segmentPath(dir(), 3)));
+		store.beginTick();
+		assertNull(store.decodeNowIfResident(OWNER, 3));
+		assertEquals(60, await(store.load(OWNER, 3)).startTick()); // nothing lost
+
+		// the next append keeps recent bytes again
+		store.append(OWNER, sealed(4, 80, 20));
+		store.flush(true);
+		store.beginTick();
+		assertNotNull(store.decodeNowIfResident(OWNER, 4));
+	}
+
+	@Test
+	void synchronousDecodeNeedsBytesInMemory() throws Exception {
+		for (int i = 0; i < 6; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true);
+		store.beginTick();
+		assertNull(store.decodeNowIfResident(OWNER, 0)); // only on disk: no synchronous read
+		assertNull(store.decodeNowIfResident(OWNER, 99)); // unknown
+		assertNotNull(store.decodeNowIfResident(OWNER, 5)); // recent, decoded even after it was written
+		assertEquals(0, await(store.load(OWNER, 0)).startTick()); // disk path still works
+	}
+
+	@Test
+	void persistsAndReopensIdentically() throws Exception {
+		for (int i = 0; i < 5; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true);
+		for (int i = 0; i < 5; i++) assertTrue(Files.isRegularFile(SegmentFiles.segmentPath(dir(), i)));
+		assertTrue(Files.isRegularFile(SegmentFiles.indexPath(dir())));
+		List<SegmentMeta> before = store.ring(OWNER).segments();
+		long bytes = store.totalBytes(OWNER);
+		store.close();
+
+		store = new StreamStore(tmp);
+		assertEquals(before, store.ring(OWNER).segments());
+		assertEquals(bytes, store.totalBytes(OWNER));
+		assertNull(store.cached(OWNER, 3));
+		DecodedSegment d = await(store.load(OWNER, 3));
+		assertEquals(60, d.startTick());
+		assertEquals(80, d.endTick());
+		assertEquals(61.0, d.positionAt(61).orElseThrow().x(), 0.01);
+		assertSame(d, store.cached(OWNER, 3));
+	}
+
+	@Test
+	void evictDeletesFilesAndUpdatesIndex() throws Exception {
+		for (int i = 0; i < 4; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		List<SegmentMeta> evicted = store.evict(OWNER, 80, 40);
+		assertEquals(List.of(0L, 1L), evicted.stream().map(SegmentMeta::seq).toList());
+		store.flush(true);
+		assertFalse(Files.exists(SegmentFiles.segmentPath(dir(), 0)));
+		assertFalse(Files.exists(SegmentFiles.segmentPath(dir(), 1)));
+		List<SegmentMeta> kept = store.ring(OWNER).segments();
+		store.close();
+
+		store = new StreamStore(tmp);
+		assertEquals(kept, store.ring(OWNER).segments());
+		assertEquals(40, store.ring(OWNER).oldestRetainedTick());
+	}
+
+	@Test
+	void wipeDeletesOldFilesButKeepsLaterAppends() throws Exception {
+		store.append(OWNER, sealed(0, 0, 20));
+		store.append(OWNER, sealed(1, 20, 20));
+		store.wipe(OWNER);
+		assertTrue(store.ring(OWNER).isEmpty());
+		assertNull(store.cached(OWNER, 0));
+		store.append(OWNER, sealed(2, 0, 20)); // stream restarts at T=0, seq keeps counting
+		store.flush(true);
+		assertFalse(Files.exists(SegmentFiles.segmentPath(dir(), 0)));
+		assertFalse(Files.exists(SegmentFiles.segmentPath(dir(), 1)));
+		assertTrue(Files.exists(SegmentFiles.segmentPath(dir(), 2)));
+		store.close();
+
+		store = new StreamStore(tmp);
+		assertEquals(List.of(2L), store.ring(OWNER).segments().stream().map(SegmentMeta::seq).toList());
+	}
+
+	@Test
+	void wipeWithNothingAfterRemovesTheFolder() {
+		store.append(OWNER, sealed(0, 0, 20));
+		store.wipe(OWNER);
+		store.flush(true);
+		assertFalse(Files.exists(dir()));
+	}
+
+	@Test
+	void missingSegmentLoadFails() {
+		CompletableFuture<DecodedSegment> f = store.load(OWNER, 99);
+		ExecutionException e = assertThrows(ExecutionException.class, () -> f.get(10, TimeUnit.SECONDS));
+		assertTrue(e.getCause() instanceof IOException, String.valueOf(e.getCause()));
+		assertSame(f, store.load(OWNER, 99)); // stays failed: a gap for the replay loop
+		assertNull(store.cached(OWNER, 99));
+	}
+
+	@Test
+	void corruptIndexIsRebuiltFromHeaders() throws Exception {
+		for (int i = 0; i < 3; i++) store.append(OWNER, sealed(i, i * 20L, 20));
+		store.flush(true);
+		List<SegmentMeta> before = store.ring(OWNER).segments();
+		store.close();
+		Files.write(SegmentFiles.indexPath(dir()), new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+		store = new StreamStore(tmp);
+		assertEquals(before, store.ring(OWNER).segments());
+		store.flush(true);
+		assertEquals(before, SegmentFiles.decodeIndex(Files.readAllBytes(SegmentFiles.indexPath(dir()))));
+	}
+
+	@Test
+	void segmentNotFittingTheRingIsDropped() {
+		store.append(OWNER, sealed(5, 0, 20));
+		store.append(OWNER, sealed(4, 20, 20)); // seq going backwards
+		store.append(OWNER, sealed(6, 10, 20)); // overlapping ticks
+		assertEquals(List.of(5L), store.ring(OWNER).segments().stream().map(SegmentMeta::seq).toList());
+	}
+
+	@Test
+	void closedStoreDropsWritesAndFailsLoads() throws Exception {
+		store.append(OWNER, sealed(0, 0, 20));
+		store.close();
+		store.append(OWNER, sealed(1, 20, 20)); // ring updated, write dropped with a warning
+		assertTrue(store.load(OWNER, 1).isCompletedExceptionally());
+		assertTrue(store.load(OWNER, 0).isCompletedExceptionally());
+		assertNotNull(store.ring(OWNER));
+		store.close(); // idempotent
+	}
+}

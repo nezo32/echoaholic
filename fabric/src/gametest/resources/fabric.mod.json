@@ -1,0 +1,25 @@
+{
+	"schemaVersion": 1,
+	"id": "echoaholic-gametest",
+	"version": "1.0.0",
+	"name": "Echoaholic GameTests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": [
+			"dev.echoaholic.test.EchoReplayGameTests",
+			"dev.echoaholic.test.EchoWorldActionGameTests",
+			"dev.echoaholic.test.EchoLifecycleGameTests",
+			"dev.echoaholic.test.EchoSoloGameTests",
+			"dev.echoaholic.test.EchoPersistenceGameTests",
+			"dev.echoaholic.test.EchoCommandGameTests",
+			"dev.echoaholic.test.EchoPerfGameTests"
+		],
+		"fabric-client-gametest": [
+			"dev.echoaholic.test.EchoaholicClientGameTest",
+			"dev.echoaholic.test.EchoNotifyClientGameTest"
+		]
+	},
+	"depends": {
+		"echoaholic": "*"
+	}
+}
