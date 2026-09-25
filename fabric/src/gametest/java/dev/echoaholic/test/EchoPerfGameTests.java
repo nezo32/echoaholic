@@ -40,7 +40,12 @@ public class EchoPerfGameTests {
 	private static final int ECHOES = 32;
 	private static final int COLUMN_TICKS = 8; // 4 breaks, one every 2 ticks, while walking one block
 	private static final int STONE_TOP = 5; // stone y = 1..5, walk on y = 6, mine y = 1..4
-	private static final int WARMUP = 20;
+	/**
+	 * Ticks replayed before measuring. Long enough for the JIT to compile the replay hot path: with only 20 ticks,
+	 * single ticks right after warm-up hit 15–35 ms with no GC and no segment crossing (compilation, not replay work),
+	 * while steady-state ticks stay at a few ms. The bounds below measure steady state.
+	 */
+	private static final int WARMUP = 100;
 	private static final int MEASURE = 200;
 
 	@GameTest(environment = "echoaholic-gametest:solo_perf", structure = "echoaholic-gametest:arena32", maxTicks = 600)

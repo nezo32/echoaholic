@@ -101,7 +101,6 @@ History is saved with the world, compressed, under `data/echoaholic/`: about 390
 - Each echo starts exactly its number × the delay behind you. It then lags a bit further behind while it waits on the action budget, in unloaded chunks, behind a wall, or lying down for your deaths, so the number is how far behind it started, not an exact clock.
 - Eggs, ender pearls, fireworks, bottles o' enchanting and fishing aren't replayed. A bucket of fish pours out as plain water, and cauldrons and beehives are left alone.
 - Players without the mod see echoes as plain player-like mannequins (with your skin), without the cyan glow or trail.
-- More than about 8 million blocks from the world origin, the trail can be off by a block. It's only the particles; the echo is where it should be.
 - Lots of echoes in one place (dozens, all mining) is a lot of work for the server, even with budgets. Lower `/echoaholic max` on busy servers.
 
 ## Source

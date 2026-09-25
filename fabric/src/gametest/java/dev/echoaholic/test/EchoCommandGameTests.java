@@ -313,14 +313,20 @@ public class EchoCommandGameTests {
 			h.assertValueEqual(EchoNoticePayload.CODEC.decode(buf), new EchoNoticePayload(EchoNoticePayload.FADED, 12), "notice");
 			h.assertValueEqual(buf.readableBytes(), 0, "bytes left");
 
-			float[] xyz = {1.5f, 64f, -2.25f, 2.5f, 64.5f, -3f};
-			EchoTrailPayload.CODEC.encode(buf, new EchoTrailPayload(42, xyz));
+			float[] offsets = {1.5f, 0f, -2.25f, 2.5f, 0.5f, -3f};
+			// far from the origin (beyond float precision) the absolute points must stay exact
+			EchoTrailPayload.CODEC.encode(buf, new EchoTrailPayload(42, 12_345_678.5, 64, -9_876_543.25, offsets));
 			EchoTrailPayload t = EchoTrailPayload.CODEC.decode(buf);
 			h.assertValueEqual(t.entityId(), 42, "trail entity");
-			h.assertTrue(java.util.Arrays.equals(t.xyz(), xyz), "trail points");
+			h.assertTrue(java.util.Arrays.equals(t.offsets(), offsets), "trail offsets");
+			h.assertTrue(t.x(1) == 12_345_681.0 && t.y(1) == 64.5 && t.z(1) == -9_876_546.25,
+					"absolute point far from the origin: " + t.x(1) + " " + t.y(1) + " " + t.z(1));
 			h.assertValueEqual(buf.readableBytes(), 0, "bytes left");
 
 			buf.writeVarInt(7);
+			buf.writeDouble(0);
+			buf.writeDouble(0);
+			buf.writeDouble(0);
 			buf.writeVarInt(EchoTrailPayload.MAX_POINTS + 1);
 			try {
 				EchoTrailPayload.CODEC.decode(buf);
@@ -333,7 +339,7 @@ public class EchoCommandGameTests {
 		}
 		h.assertValueEqual(EchoNoticePayload.TYPE.id().toString(), "echoaholic:notice", "notice channel");
 		h.assertValueEqual(EchoTrailPayload.TYPE.id().toString(), "echoaholic:trail", "trail channel");
-		h.assertValueEqual(new EchoTrailPayload(1, new float[3 * 30]).points(), EchoTrailPayload.MAX_POINTS, "at most 20 points");
+		h.assertValueEqual(new EchoTrailPayload(1, 0, 0, 0, new float[3 * 30]).points(), EchoTrailPayload.MAX_POINTS, "at most 20 points");
 		h.succeed();
 	}
 
@@ -380,7 +386,7 @@ public class EchoCommandGameTests {
 				h.assertValueEqual(t.entityId(), e.getId(), "trail entity id");
 				h.assertTrue(t.points() >= 1 && t.points() <= EchoTrailPayload.MAX_POINTS, "points " + t.points());
 				h.assertTrue(matchesUpcoming(t, path, cursorAtFirst[0]), "trail points are the upcoming recorded positions; cursor "
-						+ cursorAtFirst[0] + ", points " + java.util.Arrays.toString(t.xyz()) + ", path from cursor "
+						+ cursorAtFirst[0] + ", points " + java.util.Arrays.toString(t.offsets()) + ", path from cursor "
 						+ path.subList((int) cursorAtFirst[0], (int) Math.min(path.size(), cursorAtFirst[0] + 12)));
 				h.assertTrue(payloads(vanillaSeen, EchoTrailPayload.class).isEmpty(), "vanilla player got a trail payload");
 			} finally {
@@ -390,8 +396,9 @@ public class EchoCommandGameTests {
 		}).thenSucceed();
 	}
 
-	private static boolean near(float got, double want) {
-		return Math.abs(got - (float) want) <= 2 * Math.ulp((float) want) + 0.05;
+	private static boolean near(double got, double want) {
+		// origin (double) + float offset: precise to far below a block even at gametest-grid coordinates (~1e7)
+		return Math.abs(got - want) <= 0.05;
 	}
 
 	/** True when, for some cursor c near {@code cursor}, point i == recorded position at c + 5 * (i + 1). */
@@ -405,9 +412,7 @@ public class EchoCommandGameTests {
 					break;
 				}
 				Vec3 p = path.get((int) tick);
-				float[] xyz = t.xyz();
-				// the payload carries floats: at gametest-grid coordinates (~1e7) a float step is up to 1 block
-				if (!near(xyz[i * 3], p.x) || !near(xyz[i * 3 + 1], p.y) || !near(xyz[i * 3 + 2], p.z)) all = false;
+				if (!near(t.x(i), p.x) || !near(t.y(i), p.y) || !near(t.z(i), p.z)) all = false;
 			}
 			if (all) return true;
 		}

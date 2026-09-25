@@ -33,9 +33,9 @@ public final class EchoTrailClient {
 	public static final float DUST_SCALE = 0.8f;
 	private static final DustParticleOptions DUST = new DustParticleOptions(EchoRenderTint.RGB, DUST_SCALE);
 
-	private record Trail(float[] xyz, long receivedAt) {}
+	private record Trail(double[] xyz, long receivedAt) {}
 
-	private record Candidate(float[] xyz, double distSqr) {}
+	private record Candidate(double[] xyz, double distSqr) {}
 
 	private static final Map<Integer, Trail> TRAILS = new HashMap<>();
 	private static long clientTicks;
@@ -44,19 +44,30 @@ public final class EchoTrailClient {
 
 	public static void register() {
 		ClientPlayNetworking.registerGlobalReceiver(EchoTrailPayload.TYPE,
-				(payload, ctx) -> accept(payload.entityId(), payload.xyz()));
+				(payload, ctx) -> accept(payload.entityId(), absolute(payload)));
 		ClientTickEvents.END_CLIENT_TICK.register(EchoTrailClient::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> TRAILS.clear());
 	}
 
+	/** The payload's points as absolute x,y,z triples. */
+	private static double[] absolute(EchoTrailPayload p) {
+		double[] xyz = new double[p.points() * 3];
+		for (int i = 0; i < p.points(); i++) {
+			xyz[i * 3] = p.x(i);
+			xyz[i * 3 + 1] = p.y(i);
+			xyz[i * 3 + 2] = p.z(i);
+		}
+		return xyz;
+	}
+
 	/** Stores the newest path of this entity (a copy of whole xyz triples). Public for the client gametest. */
-	public static void accept(int entityId, float[] xyz) {
+	public static void accept(int entityId, double[] xyz) {
 		int n = xyz.length / 3 * 3;
 		if (n == 0) {
 			TRAILS.remove(entityId);
 			return;
 		}
-		float[] copy = new float[n];
+		double[] copy = new double[n];
 		System.arraycopy(xyz, 0, copy, 0, n);
 		TRAILS.put(entityId, new Trail(copy, clientTicks));
 	}
@@ -96,7 +107,7 @@ public final class EchoTrailClient {
 		}
 	}
 
-	private static void spawn(Minecraft mc, float[] p) {
+	private static void spawn(Minecraft mc, double[] p) {
 		for (int i = 0; i < p.length; i += 3) {
 			dust(mc, p[i], p[i + 1], p[i + 2]);
 			if (i + 5 < p.length) {

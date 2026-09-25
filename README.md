@@ -199,8 +199,6 @@ Measured server cost (`EchoPerfGameTests`: 32 echoes replaying a dense mining se
 - **Not replayed:** eggs, ender pearls, fireworks, bottles o' enchanting and fishing.
 - **Vanilla clients** see echoes as plain player-like mannequins with the owner's skin and the nametag, without the
   cyan tint or the trail.
-- **Far from spawn:** trail points are sent as plain floats, so more than about 8,000,000 blocks from the world origin
-  the trail can be off by a block. This is only visual; the echo itself is where it should be.
 - **Hardcore:** unchanged. Echoes don't change difficulty or hardcore rules, and they can still hurt you.
 
 ## Storage

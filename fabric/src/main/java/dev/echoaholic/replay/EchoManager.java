@@ -828,7 +828,8 @@ public final class EchoManager implements EchoListener {
 		int n = 0;
 		long c = rt.state.cursor;
 		DecodedSegment s = seg;
-		double px = e.getX(), py = e.getY(), pz = e.getZ();
+		double ox = e.getX(), oy = e.getY(), oz = e.getZ();
+		double px = ox, py = oy, pz = oz;
 		double jumpSq = DecodedSegment.JUMP_DISTANCE * DecodedSegment.JUMP_DISTANCE;
 		for (int j = 1; j <= MovementRules.TRAIL_POINTS; j++) {
 			long t = c + (long) j * MovementRules.TRAIL_STEP;
@@ -843,15 +844,15 @@ public final class EchoManager implements EchoListener {
 			if (!s.positionAt(t, m)) break;
 			double dx = m[0] - px, dy = m[1] - py, dz = m[2] - pz;
 			if (dx * dx + dy * dy + dz * dz > jumpSq) break;
-			buf[n * 3] = (float) m[0];
-			buf[n * 3 + 1] = (float) m[1];
-			buf[n * 3 + 2] = (float) m[2];
+			buf[n * 3] = (float) (m[0] - ox);
+			buf[n * 3 + 1] = (float) (m[1] - oy);
+			buf[n * 3 + 2] = (float) (m[2] - oz);
 			n++;
 			px = m[0];
 			py = m[1];
 			pz = m[2];
 		}
-		return n == 0 ? null : new EchoTrailPayload(e.getId(), Arrays.copyOf(buf, n * 3));
+		return n == 0 ? null : new EchoTrailPayload(e.getId(), ox, oy, oz, Arrays.copyOf(buf, n * 3));
 	}
 
 	// ------------------------------------------------------------------------------------------------ bookkeeping
